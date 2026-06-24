@@ -55,6 +55,16 @@
   .rev-card .actions { display: flex; gap: 6px; margin-top: 4px; }
   .rev-card .actions button { font-size: 11px; padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; }
   .rev-card .actions button:hover { border-color: var(--accent); }
+  .rate-btn { position: relative; display: inline-flex; }
+  .rate-tip {
+    position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+    background: var(--card); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 9px; font-size: 11px; line-height: 1.35;
+    white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,.35);
+    opacity: 0; visibility: hidden; transition: opacity .12s; z-index: 20; pointer-events: none;
+  }
+  .rate-btn:hover .rate-tip { opacity: 1; visibility: visible; }
+  .rate-tip-reason { opacity: .7; }
 
   .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 28px; }
   .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
@@ -683,10 +693,37 @@ function renderRevisions(items) {
         <span>EF: ${q.easiness_factor}</span>
       </div>
       <div class="actions">
-        ${[1,2,3,4,5].map(r => `<button onclick="reviewQ(${q.id},${r})">${'★'.repeat(r)}</button>`).join('')}
+        ${[1,2,3,4,5].map(r => {
+          const p = predictNextReview(r, q.easiness_factor, q.interval, q.repetitions);
+          return `<span class="rate-btn"><button onclick="reviewQ(${q.id},${r})">${'★'.repeat(r)}</button><span class="rate-tip">${p.html}</span></span>`;
+        }).join('')}
       </div>
     </div>
   `).join('');
+}
+
+// Mirror of server/sm2.py — previews the next-due date for each rating before submitting.
+const SM2_QUALITY = { 1: 0, 2: 1, 3: 3, 4: 4, 5: 5 };
+
+function predictNextReview(rating, ef, interval, reps) {
+  ef = ef ?? 2.5; interval = interval ?? 1; reps = reps ?? 0;
+  const q = SM2_QUALITY[rating];
+  const newEF = Math.max(1.3, ef + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)));
+  let newInterval, reason;
+  if (q < 3) {
+    newInterval = 1;
+    reason = `Failed recall — schedule resets to 1 day`;
+  } else {
+    const newReps = reps + 1;
+    if (newReps === 1)      { newInterval = 1; reason = `First pass — 1 day`; }
+    else if (newReps === 2) { newInterval = 6; reason = `Second pass — 6 days`; }
+    else { newInterval = Math.round(interval * newEF);
+           reason = `interval ${interval} × EF ${newEF.toFixed(2)} ≈ ${newInterval} days`; }
+  }
+  const d = new Date(); d.setDate(d.getDate() + newInterval);
+  const when = newInterval === 1 ? 'tomorrow' : `in ${newInterval} days`;
+  const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return { newInterval, reason, html: `Rate ${rating} → due ${when}<br>(${dateStr})<br><span class="rate-tip-reason">${reason}</span>` };
 }
 
 async function reviewQ(id, rating) {
