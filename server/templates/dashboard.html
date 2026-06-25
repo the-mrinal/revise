@@ -512,7 +512,12 @@ function hideLogin() {
         const el = document.getElementById("userEmail");
         el.textContent = payload.email;
         el.style.display = "inline";
-        if (payload.email === 'dmrinal626@gmail.com') {
+        const researchAllowed = [
+          'dmrinal626@gmail.com',
+          'bibhashchandra4850@gmail.com',
+          // add more emails here to grant Research access
+        ];
+        if (researchAllowed.includes(payload.email)) {
           document.getElementById("researchLink").style.display = "inline-block";
         }
       }
