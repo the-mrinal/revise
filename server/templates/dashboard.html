@@ -889,7 +889,7 @@ function renderFlex(el, d, userId) {
   const patPct = d.total_categories ? Math.round(d.patterns_mastered / d.total_categories * 100) : 0;
 
   const subtitleParts = [];
-  if (d.patterns_mastered > 0) subtitleParts.push(d.patterns_mastered + ' pattern' + (d.patterns_mastered > 1 ? 's' : '') + ' mastered');
+  if (d.patterns_mastered > 0) subtitleParts.push(d.patterns_mastered + ' categor' + (d.patterns_mastered > 1 ? 'ies' : 'y') + ' mastered');
   if (d.total_solved > 0) subtitleParts.push(d.total_solved + ' problems solved');
 
   el.innerHTML = `
@@ -917,7 +917,7 @@ function renderFlex(el, d, userId) {
         <h4>DSA Patterns</h4>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
           <span style="font-size:32px;font-weight:800;color:#fff;">${d.patterns_mastered}</span>
-          <div><div style="font-size:12px;color:var(--muted);">${d.total_categories} categories mastered</div><div style="font-size:12px;color:var(--muted);margin-top:1px;">${d.patterns_started} started</div></div>
+          <div><div style="font-size:12px;color:var(--muted);">categor${d.patterns_mastered === 1 ? 'y' : 'ies'} mastered</div><div style="font-size:12px;color:var(--muted);margin-top:1px;">${d.patterns_started} of ${d.total_categories} started</div></div>
         </div>
         <div class="flex-pat-bar"><div class="flex-pat-fill" style="width:${patPct}%"></div></div>
         ${topPats}
