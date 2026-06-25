@@ -143,8 +143,8 @@
       <div class="patterns-header">
         <div class="big-num" id="patMastered">0</div>
         <div>
-          <div class="big-label"><span id="patTotal">15</span> categories mastered</div>
-          <div class="big-label" style="margin-top:2px"><span id="patStarted">0</span> started</div>
+          <div class="big-label" id="patMasteredLabel">categories mastered</div>
+          <div class="big-label" style="margin-top:2px"><span id="patStarted">0</span> of <span id="patTotal">15</span> started</div>
         </div>
       </div>
       <div class="pattern-bar"><div class="fill" id="patFill"></div></div>
@@ -289,7 +289,7 @@ function render(d, isOwner) {
   // Title
   document.getElementById('funTitle').textContent = d.title;
   const subtitleParts = [];
-  if (d.patterns_mastered > 0) subtitleParts.push(d.patterns_mastered + ' pattern' + (d.patterns_mastered > 1 ? 's' : '') + ' mastered');
+  if (d.patterns_mastered > 0) subtitleParts.push(d.patterns_mastered + ' categor' + (d.patterns_mastered > 1 ? 'ies' : 'y') + ' mastered');
   if (d.total_solved > 0) subtitleParts.push(d.total_solved + ' problems solved');
   document.getElementById('funSubtitle').textContent = subtitleParts.join(' \u00B7 ');
 
@@ -335,6 +335,8 @@ function render(d, isOwner) {
   // Patterns
   if (d.patterns_started > 0) {
     document.getElementById('patMastered').textContent = d.patterns_mastered;
+    document.getElementById('patMasteredLabel').textContent =
+      'categor' + (d.patterns_mastered === 1 ? 'y' : 'ies') + ' mastered';
     document.getElementById('patTotal').textContent = d.total_categories;
     document.getElementById('patStarted').textContent = d.patterns_started;
     document.getElementById('patFill').style.width = (d.patterns_mastered / d.total_categories * 100) + '%';
