@@ -117,18 +117,22 @@ def update_question_sm2(user_id: str, qid: int, data: dict, set_reviewed: bool =
     )
 
 
-def get_revisions_due(user_id: str, target_date: str | None = None) -> list[dict]:
+def get_revisions_due(
+    user_id: str, target_date: str | None = None, limit: int | None = None
+) -> list[dict]:
     target = target_date or date.today().isoformat()
     client = get_client()
-    result = (
+    query = (
         client.table("questions")
         .select(COLUMNS)
         .eq("user_id", user_id)
         .lte("next_review", target)
         .order("next_review", desc=False)
-        .execute()
     )
-    return result.data
+    # limit None or <= 0 means "no cap" — surface every due revision.
+    if limit and limit > 0:
+        query = query.limit(limit)
+    return query.execute().data
 
 
 def update_question(user_id: str, qid: int, data: dict) -> dict | None:
@@ -297,6 +301,37 @@ def merge_duplicates_for_question(user_id: str, qid: int) -> int | None:
     # Return the surviving ID (highest repetitions)
     dupes.sort(key=lambda r: (r.get("repetitions") or 0, r.get("solved_at") or ""), reverse=True)
     return dupes[0]["id"]
+
+
+DEFAULT_REVISION_QUEUE_SIZE = 20
+
+
+def get_user_settings(user_id: str) -> dict:
+    """Return the user's settings, falling back to defaults if none are stored."""
+    client = get_client()
+    result = (
+        client.table("user_settings")
+        .select("revision_queue_size")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return result.data[0]
+    return {"revision_queue_size": DEFAULT_REVISION_QUEUE_SIZE}
+
+
+def upsert_user_settings(user_id: str, data: dict) -> dict:
+    """Insert or update the user's settings row and return the stored values."""
+    client = get_client()
+    row = {"user_id": user_id, **data}
+    result = (
+        client.table("user_settings")
+        .upsert(row, on_conflict="user_id")
+        .execute()
+    )
+    stored = result.data[0] if result.data else row
+    return {"revision_queue_size": stored.get("revision_queue_size")}
 
 
 def get_user_platforms(user_id: str) -> list[dict]:
