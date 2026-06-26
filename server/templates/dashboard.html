@@ -671,7 +671,7 @@ function renderActivity() {
     <td>${q.difficulty ? `<span class="tag tag-${q.difficulty}">${q.difficulty}</span>` : '—'}</td>
     <td><span class="stars">${'★'.repeat(q.self_rating||0)}${'☆'.repeat(5-(q.self_rating||0))}</span></td>
     <td>${(q.attempts||1) > 1 ? '×'+q.attempts : ''}</td>
-    <td>${q.time_taken ? q.time_taken+'m' : '—'}</td>
+    <td>${q.time_taken ? q.time_taken+'m' : '—'} ${historyBtn(q.id)}</td>
   </tr>`).join('');
 }
 
@@ -696,6 +696,7 @@ function renderRevisions(items) {
         <span class="tag tag-platform">${esc(q.platform||'')}</span>
         ${q.difficulty ? `<span class="tag tag-${q.difficulty}">${q.difficulty}</span>` : ''}
         <span>EF: ${q.easiness_factor}</span>
+        ${historyBtn(q.id)}
       </div>
       <div class="actions">
         ${[1,2,3,4,5].map(r => {
@@ -772,7 +773,7 @@ function renderTable() {
     <td>${q.time_taken ? q.time_taken+'m' : '—'}</td>
     <td>${q.solved_at ? new Date(q.solved_at).toLocaleDateString() : '—'}</td>
     <td>${q.next_review || '—'}</td>
-    <td><button class="edit-btn" onclick="openEdit(${q.id})">Edit</button></td>
+    <td>${historyBtn(q.id)}<button class="edit-btn" onclick="openEdit(${q.id})">Edit</button></td>
     <td><button class="delete-btn" onclick="deleteQ(${q.id})">✕</button></td>
   </tr>`).join('');
 }
@@ -1154,5 +1155,6 @@ function populatePatternDropdown() {
 
 initAuth();
 </script>
+<script src="/static/history.js"></script>
 </body>
 </html>

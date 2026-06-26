@@ -211,7 +211,7 @@ a{color:var(--accent);text-decoration:none}
       <input type="text" id="dsaSearch" placeholder="Search..." oninput="renderDSA()">
     </div>
     <table class="log-table">
-      <thead><tr><th>Problem</th><th>Pattern</th><th>Diff</th><th>Rating</th><th>Time</th><th>Review</th></tr></thead>
+      <thead><tr><th>Problem</th><th>Pattern</th><th>Diff</th><th>Rating</th><th>Time</th><th>Review</th><th></th></tr></thead>
       <tbody id="dsaList"></tbody>
     </table>
     <p id="dsaEmpty" style="color:var(--muted);font-size:13px;padding:8px 0">No problems tracked yet. Use the Revise extension to add problems!</p>
@@ -645,7 +645,7 @@ function renderDSA() {
     const title = p.url ? `<a href="${p.url}" target="_blank">${p.title||p.url}</a>` : (p.title||'—');
     const review = p.next_review ? new Date(p.next_review).toLocaleDateString('en-IN',{day:'numeric',month:'short'}) : '—';
     const isdue = p.next_review && new Date(p.next_review) <= new Date();
-    return `<tr><td>${title}<br><span style="font-size:11px;color:var(--muted)">${p.platform||''}</span></td><td>${p.pattern||'—'}</td><td><span class="badge ${dcls}">${p.difficulty||'—'}</span></td><td><span class="badge ${rcls}">${p.self_rating||'—'}/5</span></td><td>${p.time_taken?p.time_taken+'m':'—'}</td><td style="${isdue?'color:var(--red);font-weight:600':''}">${review}</td></tr>`;
+    return `<tr><td>${title}<br><span style="font-size:11px;color:var(--muted)">${p.platform||''}</span></td><td>${p.pattern||'—'}</td><td><span class="badge ${dcls}">${p.difficulty||'—'}</span></td><td><span class="badge ${rcls}">${p.self_rating||'—'}/5</span></td><td>${p.time_taken?p.time_taken+'m':'—'}</td><td style="${isdue?'color:var(--red);font-weight:600':''}">${review}</td><td>${historyBtn(p.id)}</td></tr>`;
   }).join('');
   // stats
   const dl = p => (p.difficulty||'').toLowerCase();
@@ -720,5 +720,6 @@ if (auth && auth.access_token) {
   showLogin();
 }
 </script>
+<script src="/static/history.js"></script>
 </body>
 </html>

@@ -192,6 +192,32 @@ create policy "Users update own platforms" on public.user_platforms for update u
 create policy "Users delete own platforms" on public.user_platforms for delete using (auth.uid() = user_id);
 
 create unique index idx_user_platforms_unique on public.user_platforms(user_id, name);
+
+-- Per-question audit/event log (history of every solve / review / re-attempt).
+-- Also available as server/migrations/001_question_events.sql
+create table public.question_events (
+  id              bigint generated always as identity primary key,
+  user_id         uuid not null references auth.users(id) on delete cascade,
+  question_id     bigint not null references public.questions(id) on delete cascade,
+  event_type      text not null,            -- 'created' | 'reviewed' | 'attempted'
+  self_rating     integer,
+  time_taken      integer,
+  interval        integer,                  -- SM-2 snapshot AFTER this event
+  repetitions     integer,
+  easiness_factor double precision,
+  next_review     date,
+  reconstructed   boolean default false,    -- true for backfilled rows (approximate)
+  created_at      timestamptz default now()
+);
+
+alter table public.question_events enable row level security;
+
+create policy "Users see own events" on public.question_events for select using (auth.uid() = user_id);
+create policy "Users insert own events" on public.question_events for insert with check (auth.uid() = user_id);
+create policy "Users update own events" on public.question_events for update using (auth.uid() = user_id);
+create policy "Users delete own events" on public.question_events for delete using (auth.uid() = user_id);
+
+create index idx_qevents_question on public.question_events(user_id, question_id, created_at);
 ```
 
 Configure Auth redirect URLs in Supabase Dashboard:
