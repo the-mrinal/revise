@@ -500,9 +500,19 @@ document.getElementById("finishBtn").addEventListener("click", async () => {
       return;
     }
 
+    // The review endpoint auto-merges duplicates and may return a different
+    // surviving question id. Use that id for the metadata update so we don't
+    // PUT to a row that was just merged away (which would 404 and silently
+    // drop the difficulty/time/notes/pattern fields).
+    let targetId = finishTimerData.questionId;
+    try {
+      const reviewed = await reviewRes.json();
+      if (reviewed && reviewed.id) targetId = reviewed.id;
+    } catch {}
+
     // Then: update extra metadata (difficulty, time, notes)
     const r = await apiFetch(
-      `/questions/${finishTimerData.questionId}`,
+      `/questions/${targetId}`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -510,7 +520,7 @@ document.getElementById("finishBtn").addEventListener("click", async () => {
       }
     );
 
-    if (r.ok || reviewRes.ok) {
+    if (r.ok) {
       showToast(
         `Saved! ${finishTimerData.totalMinutes} min recorded.`,
         "success"
