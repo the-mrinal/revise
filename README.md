@@ -218,7 +218,23 @@ create policy "Users update own events" on public.question_events for update usi
 create policy "Users delete own events" on public.question_events for delete using (auth.uid() = user_id);
 
 create index idx_qevents_question on public.question_events(user_id, question_id, created_at);
+
+-- Per-user settings (e.g. how many revisions to surface as "due" at once)
+create table public.user_settings (
+  user_id              uuid primary key references auth.users(id) on delete cascade,
+  revision_queue_size  integer not null default 20,  -- 0 = unlimited
+  updated_at           timestamptz default now()
+);
+
+alter table public.user_settings enable row level security;
+
+create policy "Users see own settings" on public.user_settings for select using (auth.uid() = user_id);
+create policy "Users insert own settings" on public.user_settings for insert with check (auth.uid() = user_id);
+create policy "Users update own settings" on public.user_settings for update using (auth.uid() = user_id);
+create policy "Users delete own settings" on public.user_settings for delete using (auth.uid() = user_id);
 ```
+
+> Existing deployments: apply the incremental migrations in `server/migrations/` (run each `.sql` in the Supabase SQL Editor).
 
 Configure Auth redirect URLs in Supabase Dashboard:
 - **Site URL**: `https://your-domain.com/dashboard`

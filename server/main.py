@@ -30,6 +30,7 @@ from database import (
     get_stats,
     get_today_activity,
     get_user_platforms,
+    get_user_settings,
     increment_attempts,
     insert_event,
     insert_question,
@@ -38,6 +39,7 @@ from database import (
     merge_duplicates_for_question,
     update_question,
     update_question_sm2,
+    upsert_user_settings,
 )
 from patterns import (
     PATTERNS,
@@ -133,6 +135,11 @@ class MagicLinkRequest(BaseModel):
 class PlatformIn(BaseModel):
     name: str
     url_pattern: str
+
+
+class SettingsUpdate(BaseModel):
+    # 0 = unlimited. Capped to keep a single day's queue sane.
+    revision_queue_size: int = Field(ge=0, le=500)
 
 
 class RefreshRequest(BaseModel):
@@ -237,7 +244,18 @@ def list_questions(user_id: str = Depends(get_current_user_id)):
 
 @app.get("/api/revisions/today")
 def revisions_today(user_id: str = Depends(get_current_user_id)):
-    return get_revisions_due(user_id, date.today().isoformat())
+    limit = get_user_settings(user_id).get("revision_queue_size")
+    return get_revisions_due(user_id, date.today().isoformat(), limit=limit)
+
+
+@app.get("/api/settings")
+def read_settings(user_id: str = Depends(get_current_user_id)):
+    return get_user_settings(user_id)
+
+
+@app.put("/api/settings")
+def write_settings(s: SettingsUpdate, user_id: str = Depends(get_current_user_id)):
+    return upsert_user_settings(user_id, {"revision_queue_size": s.revision_queue_size})
 
 
 @app.post("/api/questions/{qid}/review")
