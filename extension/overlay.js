@@ -995,6 +995,16 @@
         return;
       }
 
+      // The review endpoint auto-merges duplicates and may return a different
+      // surviving question id. Use that id for the metadata update so we don't
+      // PUT to a row that was just merged away (which would 404 and silently
+      // drop the notes/difficulty/time fields).
+      let targetId = qid;
+      try {
+        const reviewed = await reviewRes.json();
+        if (reviewed && reviewed.id) targetId = reviewed.id;
+      } catch {}
+
       // Update metadata
       const payload = {
         self_rating: selectedRating,
@@ -1007,11 +1017,20 @@
         space_complexity: shadow.getElementById("revise-space-complexity").value || null,
       };
 
-      await apiFetch(`/questions/${qid}`, {
+      const updateRes = await apiFetch(`/questions/${targetId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+
+      if (!updateRes.ok) {
+        let msg = "Saved rating, but failed to save details";
+        try { const err = await updateRes.json(); msg = err.detail || msg; } catch {}
+        showToast(msg, "error");
+        btn.disabled = false;
+        btn.textContent = "Save & Finish";
+        return;
+      }
 
       // Clear timer
       chrome.storage.local.remove("timer");
