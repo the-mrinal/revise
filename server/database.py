@@ -29,6 +29,44 @@ COLUMNS = (
 )
 
 
+EVENT_COLUMNS = (
+    "id, question_id, event_type, self_rating, time_taken, interval, "
+    "repetitions, easiness_factor, next_review, reconstructed, created_at"
+)
+
+# Fields an event may carry beyond the always-present user/question/type.
+_EVENT_FIELDS = (
+    "self_rating", "time_taken", "interval", "repetitions",
+    "easiness_factor", "next_review", "reconstructed", "created_at",
+)
+
+
+def insert_event(user_id: str, question_id: int, event_type: str, **fields) -> None:
+    """Append a row to the per-question audit log. Best-effort: never raises."""
+    try:
+        client = get_client()
+        row = {"user_id": user_id, "question_id": question_id, "event_type": event_type}
+        for key in _EVENT_FIELDS:
+            if fields.get(key) is not None:
+                row[key] = fields[key]
+        client.table("question_events").insert(row).execute()
+    except Exception as e:  # logging must never break a save
+        print(f"[events] failed to log {event_type} for q{question_id}: {e}")
+
+
+def get_question_events(user_id: str, qid: int) -> list[dict]:
+    client = get_client()
+    result = (
+        client.table("question_events")
+        .select(EVENT_COLUMNS)
+        .eq("user_id", user_id)
+        .eq("question_id", qid)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    return result.data
+
+
 def insert_question(user_id: str, data: dict) -> dict:
     client = get_client()
     row = {**data, "user_id": user_id}
@@ -128,18 +166,41 @@ def get_today_activity(user_id: str) -> list[dict]:
         .or_(f"solved_at.gte.{today}T00:00:00,last_reviewed.gte.{today}T00:00:00")
         .execute()
     )
-    # Compute activity_type in Python
+    rows_data = result.data
+
+    # A question is NEW today only if today is its first-ever solve session.
+    # We decide from the audit log: the earliest 'created'/'reviewed' event.
+    # The extension logs a 'reviewed' event even on the first solve, so the
+    # timestamp alone is unreliable — the event log is the source of truth.
+    qids = [r["id"] for r in rows_data]
+    first_event_date: dict[int, str] = {}
+    if qids:
+        events = (
+            client.table("question_events")
+            .select("question_id, created_at")
+            .eq("user_id", user_id)
+            .in_("question_id", qids)
+            .in_("event_type", ["created", "reviewed"])
+            .order("created_at", desc=False)
+            .execute()
+        )
+        for e in events.data:
+            qid = e["question_id"]
+            day = (e.get("created_at") or "")[:10]
+            if not day:
+                continue
+            if qid not in first_event_date or day < first_event_date[qid]:
+                first_event_date[qid] = day
+
     rows = []
-    for r in result.data:
-        solved_date = (r.get("solved_at") or "")[:10]
-        reviewed_date = (r.get("last_reviewed") or "")[:10]
-        # If both new and reviewed today, treat as REVISION
-        if reviewed_date == today:
-            activity_type = "REVISION"
-        elif solved_date == today:
-            activity_type = "NEW"
+    for r in rows_data:
+        first_day = first_event_date.get(r["id"])
+        if first_day is not None:
+            activity_type = "NEW" if first_day == today else "REVISION"
         else:
-            activity_type = "REVISION"
+            # Fallback when no event log exists yet (pre-backfill): a first
+            # solve dated today is NEW; activity on an older question is REVISION.
+            activity_type = "NEW" if (r.get("solved_at") or "")[:10] == today else "REVISION"
         rows.append({**r, "activity_type": activity_type})
     # Sort: most recent activity first
     rows.sort(

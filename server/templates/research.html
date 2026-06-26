@@ -1456,6 +1456,7 @@ function buildMetaHtml(data) {
   if (data.time_taken) html += `<span class="q-meta-badge time"><span class="label">time</span> ${data.time_taken}m</span>`;
   if (data.self_rating) html += `<span class="q-meta-badge rating ${data.self_rating <= 2 ? 'low' : ''}"><span class="label">rating</span> ${ratingStars(data.self_rating)}</span>`;
   if (data.next_review) html += `<span class="q-meta-badge review"><span class="label">next</span> ${data.next_review}</span>`;
+  if (data.id) html += ` <button class="qh-trigger" title="History" onclick="openHistory(${data.id})">🕓</button>`;
   return html;
 }
 
@@ -1785,5 +1786,6 @@ function getEmailFromToken() {
 // Auto-connect if auth exists
 if (getAuth()) connectRevise();
 </script>
+<script src="/static/history.js"></script>
 </body>
 </html>

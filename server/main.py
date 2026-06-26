@@ -25,11 +25,13 @@ from database import (
     get_all_questions,
     get_flex_stats,
     get_question,
+    get_question_events,
     get_revisions_due,
     get_stats,
     get_today_activity,
     get_user_platforms,
     increment_attempts,
+    insert_event,
     insert_question,
     insert_user_platform,
     merge_duplicates,
@@ -190,7 +192,12 @@ def create_question(q: QuestionIn, user_id: str = Depends(get_current_user_id)):
     url = normalize_url(q.url)
     existing = find_by_url(user_id, url)
     if existing:
-        return increment_attempts(user_id, existing["id"], q.title)
+        updated = increment_attempts(user_id, existing["id"], q.title)
+        insert_event(
+            user_id, existing["id"], "attempted",
+            self_rating=q.self_rating, time_taken=q.time_taken,
+        )
+        return updated
 
     user_plats = get_user_platforms(user_id)
     platform = detect_platform(url, user_plats)
@@ -214,6 +221,12 @@ def create_question(q: QuestionIn, user_id: str = Depends(get_current_user_id)):
     question = insert_question(user_id, data)
     update_question_sm2(user_id, question["id"], sm2_result)
     updated = get_question(user_id, question["id"])
+    insert_event(
+        user_id, question["id"], "created",
+        self_rating=q.self_rating, time_taken=q.time_taken,
+        interval=sm2_result["interval"], repetitions=sm2_result["repetitions"],
+        easiness_factor=sm2_result["easiness_factor"], next_review=sm2_result["next_review"],
+    )
     return updated
 
 
@@ -241,7 +254,22 @@ def review_question(qid: int, review: ReviewIn, user_id: str = Depends(get_curre
         question["repetitions"],
     )
     update_question_sm2(user_id, qid, result, set_reviewed=True)
+    insert_event(
+        user_id, qid, "reviewed",
+        self_rating=review.self_rating,
+        interval=result["interval"], repetitions=result["repetitions"],
+        easiness_factor=result["easiness_factor"], next_review=result["next_review"],
+    )
     return get_question(user_id, qid)
+
+
+@app.get("/api/questions/{qid}/history")
+def question_history(qid: int, user_id: str = Depends(get_current_user_id)):
+    """Audit log for a single question: every solve / review / re-attempt."""
+    question = get_question(user_id, qid)
+    if not question:
+        raise HTTPException(404, "Question not found")
+    return {"question": question, "events": get_question_events(user_id, qid)}
 
 
 @app.put("/api/questions/{qid}")
@@ -477,6 +505,11 @@ def flex_stats(user_id: str):
         return stats or {"total_solved": 0}
     return stats
 
+
+# Shared static assets for templates (e.g. the question-history modal)
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 # Static file serving for research docs (markdown + SVG diagrams)
 # Check Docker path first (research-data/ copied in during build), then local dev path
