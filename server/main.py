@@ -26,6 +26,7 @@ from database import (
     get_flex_stats,
     get_question,
     get_question_events,
+    get_questions_activity_summary,
     get_revisions_due,
     get_stats,
     get_today_activity,
@@ -246,6 +247,13 @@ def list_questions(user_id: str = Depends(get_current_user_id)):
 def revisions_today(user_id: str = Depends(get_current_user_id)):
     limit = get_user_settings(user_id).get("revision_queue_size")
     return get_revisions_due(user_id, date.today().isoformat(), limit=limit)
+
+
+@app.get("/api/activity-summary")
+def activity_summary(user_id: str = Depends(get_current_user_id)):
+    """Per-question revision summary (revision_count, last_revised_at) from the
+    audit log — used by the dashboard to split items into new vs revised."""
+    return get_questions_activity_summary(user_id)
 
 
 @app.get("/api/settings")

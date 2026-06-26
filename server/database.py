@@ -214,6 +214,46 @@ def get_today_activity(user_id: str) -> list[dict]:
     return rows
 
 
+def get_questions_activity_summary(user_id: str) -> dict:
+    """Per-question revision summary derived from the audit log.
+
+    The extension logs a 'reviewed' event even on a first solve, so a question's
+    last_reviewed timestamp can't tell a genuine revision from the original
+    solve. The event log can: a *revision* is any review on a calendar day after
+    the question's first-ever solve day. Returns a dict keyed by question id:
+
+        { qid: {first_solved_on, revision_count, last_revised_at} }
+    """
+    client = get_client()
+    events = (
+        client.table("question_events")
+        .select("question_id, created_at")
+        .eq("user_id", user_id)
+        .in_("event_type", ["created", "reviewed"])
+        .order("created_at", desc=False)
+        .execute()
+    ).data
+
+    by_q: dict[int, list[str]] = defaultdict(list)
+    for e in events:
+        ts = e.get("created_at")
+        if ts:
+            by_q[e["question_id"]].append(ts)
+
+    summary: dict[int, dict] = {}
+    for qid, times in by_q.items():
+        times.sort()
+        first_day = times[0][:10]
+        revision_times = [t for t in times if t[:10] > first_day]
+        revision_days = {t[:10] for t in revision_times}
+        summary[qid] = {
+            "first_solved_on": first_day,
+            "revision_count": len(revision_days),
+            "last_revised_at": max(revision_times) if revision_times else None,
+        }
+    return summary
+
+
 def find_by_url(user_id: str, url: str) -> dict | None:
     client = get_client()
     result = (

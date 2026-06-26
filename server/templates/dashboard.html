@@ -16,10 +16,34 @@
   .sign-out-btn { background: none; border: 1px solid #4c1d1d; color: #fca5a5; padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
   .sign-out-btn:hover { background: #4c1d1d; }
 
-  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 28px; }
-  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-  .stat-card .value { font-size: 28px; font-weight: 700; color: #fff; }
-  .stat-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-bottom: 28px; }
+  .stat-card {
+    position: relative; overflow: hidden;
+    background: linear-gradient(150deg, #16161c 0%, #101015 100%);
+    border: 1px solid var(--border); border-radius: 16px; padding: 22px 20px;
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  }
+  .stat-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--sc-accent, var(--accent)); }
+  .stat-card::after {
+    content: ""; position: absolute; top: -40px; right: -40px; width: 120px; height: 120px;
+    background: radial-gradient(circle, var(--sc-glow, rgba(91,106,191,0.22)) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .stat-card:hover { transform: translateY(-3px); border-color: var(--sc-accent, var(--accent)); box-shadow: 0 8px 28px rgba(0,0,0,0.45); }
+  .stat-card .stat-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .stat-card .stat-icon {
+    width: 38px; height: 38px; border-radius: 11px; display: flex; align-items: center; justify-content: center;
+    font-size: 19px; background: var(--sc-icon-bg, rgba(91,106,191,0.15));
+  }
+  .stat-card .label { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.7px; font-weight: 600; }
+  .stat-card .value { font-size: 40px; font-weight: 800; color: #fff; line-height: 1; letter-spacing: -1px; }
+  .stat-card .value .unit { font-size: 16px; font-weight: 600; color: var(--muted); margin-left: 4px; letter-spacing: 0; }
+  .stat-card .stat-sub { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+  .stat-blue   { --sc-accent: #6366f1; --sc-glow: rgba(99,102,241,0.25);  --sc-icon-bg: rgba(99,102,241,0.16); }
+  .stat-amber  { --sc-accent: #f59e0b; --sc-glow: rgba(245,158,11,0.22);  --sc-icon-bg: rgba(245,158,11,0.16); }
+  .stat-green  { --sc-accent: #10b981; --sc-glow: rgba(16,185,129,0.22);  --sc-icon-bg: rgba(16,185,129,0.16); }
+  .stat-violet { --sc-accent: #a855f7; --sc-glow: rgba(168,85,247,0.22);  --sc-icon-bg: rgba(168,85,247,0.16); }
 
   .section { margin-bottom: 28px; }
   .section h2 { font-size: 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
@@ -149,6 +173,31 @@
   .tab-content { display: none; }
   .tab-content.active { display: block; }
 
+  /* Date-grouped lists (Revised / New Problem tabs) */
+  .date-group { margin-bottom: 22px; }
+  .date-group .date-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .date-group .date-head .d { font-size: 13px; font-weight: 700; color: var(--text); }
+  .date-group .date-head .c { font-size: 11px; color: var(--muted); }
+  .item-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); margin-bottom: 6px; }
+  .item-row:hover { border-color: var(--accent); }
+  .item-row .it-main { flex: 1; min-width: 0; }
+  .item-row .it-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-row .it-meta { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+  .item-row .it-time { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .rev-count { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 10px; background: #1e1b4b; color: #c4b5fd; font-weight: 600; }
+
+  /* Today tab sections */
+  .today-section { margin-bottom: 26px; }
+  .today-section h2 { font-size: 15px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .queue-note { font-size: 11px; color: var(--muted); margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .queue-note a { cursor: pointer; }
+
+  /* Revision queue setting */
+  .queue-setting { display: flex; align-items: flex-end; gap: 10px; }
+  .queue-setting .field { margin-bottom: 0; }
+  .queue-setting input { width: 90px; }
+  #queueStatus { font-size: 12px; color: var(--muted); }
+
   /* Login overlay */
   /* Flex modal */
   .flex-modal .modal { width: 640px; max-height: 85vh; overflow-y: auto; padding: 0; }
@@ -232,19 +281,29 @@
 </div>
 <p class="subtitle">Spaced repetition for everything you learn</p>
 
-<div class="stats-grid" id="statsGrid"></div>
-
 <div class="tab-bar" id="tabBar">
   <button class="active" data-tab="overview">Overview</button>
-  <button data-tab="patterns">Patterns</button>
-  <button data-tab="revisions">Revisions</button>
+  <button data-tab="today">Today</button>
+  <button data-tab="revised">Revised</button>
+  <button data-tab="patterns">Pattern</button>
   <button data-tab="all">All Items</button>
+  <button data-tab="new">New Problem</button>
 </div>
 
 <div class="tab-content active" id="tab-overview">
+  <div class="stats-grid" id="statsGrid"></div>
   <div class="chart-row" id="chartRow"></div>
+</div>
 
-  <div class="section">
+<div class="tab-content" id="tab-today">
+  <div class="today-section">
+    <h2>Due for Revision <span class="badge" id="revBadge">0</span>
+      <span class="queue-note" id="queueNote"></span>
+    </h2>
+    <div class="revision-cards" id="revisionCards"><div class="empty">Loading...</div></div>
+  </div>
+
+  <div class="today-section">
     <h2>Today's Activity <span class="badge" id="activityBadge">0</span></h2>
     <div class="toolbar">
       <div class="activity-filter" id="activityFilter">
@@ -270,6 +329,14 @@
   </div>
 </div>
 
+<div class="tab-content" id="tab-revised">
+  <div class="section">
+    <h2>Revised Problems <span class="badge" id="revisedBadge">0</span></h2>
+    <p class="subtitle" style="margin-bottom:16px;">Every problem you've revised, newest first. Click 🕓 on any item to see exactly which days you practiced it.</p>
+    <div id="revisedList"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
 <div class="tab-content" id="tab-patterns">
   <div class="section" id="patternsSection">
     <h2>DSA Patterns <span class="badge" id="patternsBadge">0/0</span></h2>
@@ -281,10 +348,11 @@
   </div>
 </div>
 
-<div class="tab-content" id="tab-revisions">
+<div class="tab-content" id="tab-new">
   <div class="section">
-    <h2>Due for Revision <span class="badge" id="revBadge">0</span></h2>
-    <div class="revision-cards" id="revisionCards"><div class="empty">Loading...</div></div>
+    <h2>New Problems <span class="badge" id="newBadge">0</span></h2>
+    <p class="subtitle" style="margin-bottom:16px;">Problems you've solved once but haven't revised yet, grouped by the day you first solved them.</p>
+    <div id="newList"><div class="empty">Loading...</div></div>
   </div>
 </div>
 
@@ -397,6 +465,18 @@
       <p style="font-size:11px;color:var(--muted);margin-top:8px;">Enter a domain like <code style="background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:3px;font-size:11px;">khanacademy.org</code> or a regex pattern.</p>
     </div>
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px;">
+      <h3 style="font-size:13px;margin-bottom:8px;">Revision Queue</h3>
+      <div class="queue-setting">
+        <div class="field">
+          <label>Problems queued per day</label>
+          <input type="number" id="queueSizeInput" min="0" max="500" placeholder="20">
+        </div>
+        <button class="btn-save" style="padding:8px 16px;border-radius:6px;font-size:13px;cursor:pointer;border:none;height:35px;" onclick="saveQueueSize()">Save</button>
+        <span id="queueStatus"></span>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:8px;">How many revisions to surface as "due" at once. Set <code style="background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:3px;font-size:11px;">0</code> for unlimited.</p>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px;">
       <h3 style="font-size:13px;margin-bottom:8px;">Maintenance</h3>
       <button id="mergeDupesBtn" onclick="mergeDuplicates()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:6px;font-size:13px;cursor:pointer;">Merge Duplicate Questions</button>
       <span id="mergeStatus" style="font-size:12px;color:var(--muted);margin-left:8px;"></span>
@@ -416,6 +496,8 @@ let patternsData = null;
 let patternLabels = [];
 let activityFilterValue = "all";
 let sortKey = "solved_at", sortDir = -1;
+let activitySummary = {};   // qid -> {first_solved_on, revision_count, last_revised_at}
+let queueSize = null;       // user's configured revision queue size (0 = unlimited)
 
 // --- Tab switching ---
 function switchTab(name) {
@@ -598,7 +680,7 @@ async function initAuth() {
 }
 
 async function load() {
-  const [questions, stats, revisions, activity, patterns, pLabels, recommendations] = await Promise.all([
+  const [questions, stats, revisions, activity, patterns, pLabels, recommendations, summary, settings] = await Promise.all([
     apiFetch("/questions").then(r => r.json()),
     apiFetch("/stats").then(r => r.json()),
     apiFetch("/revisions/today").then(r => r.json()),
@@ -606,28 +688,62 @@ async function load() {
     apiFetch("/patterns").then(r => r.json()),
     apiFetch("/patterns/list").then(r => r.json()),
     apiFetch("/patterns/recommend").then(r => r.json()),
+    apiFetch("/activity-summary").then(r => r.json()).catch(() => ({})),
+    apiFetch("/settings").then(r => r.json()).catch(() => ({})),
   ]);
   allQuestions = questions;
   todayActivity = activity;
   patternsData = patterns;
   patternLabels = pLabels;
+  activitySummary = summary || {};
+  queueSize = (settings && settings.revision_queue_size != null) ? settings.revision_queue_size : null;
   renderStats(stats);
   renderCharts(stats);
   renderPatterns(patterns, recommendations);
   renderActivity();
   renderRevisions(revisions);
+  renderRevised();
+  renderNewProblems();
+  renderQueueNote();
   populateFilters();
   populatePatternDropdown();
   renderTable();
 }
 
+// Per-question revision info, with a sensible fallback when no event log exists
+// yet (pre-backfill rows): treat a question reviewed on a later calendar day
+// than it was solved as revised.
+function revInfo(q) {
+  const s = activitySummary[q.id] || activitySummary[String(q.id)];
+  if (s) return s;
+  const solvedDay = (q.solved_at || "").slice(0, 10);
+  const reviewedDay = (q.last_reviewed || "").slice(0, 10);
+  const revised = reviewedDay && solvedDay && reviewedDay > solvedDay;
+  return {
+    first_solved_on: solvedDay,
+    revision_count: revised ? 1 : 0,
+    last_revised_at: revised ? q.last_reviewed : null,
+  };
+}
+
 function renderStats(s) {
-  document.getElementById("statsGrid").innerHTML = `
-    <div class="stat-card"><div class="value">${s.total}</div><div class="label">Total Tracked</div></div>
-    <div class="stat-card"><div class="value">${s.due_today}</div><div class="label">Due Today</div></div>
-    <div class="stat-card"><div class="value">${s.avg_rating || '—'}</div><div class="label">Avg Rating</div></div>
-    <div class="stat-card"><div class="value">${Object.keys(s.by_platform).length}</div><div class="label">Platforms</div></div>
-  `;
+  const card = (cls, icon, value, label, sub) => `
+    <div class="stat-card ${cls}">
+      <div class="stat-top">
+        <span class="label">${label}</span>
+        <span class="stat-icon">${icon}</span>
+      </div>
+      <div class="value">${value}</div>
+      ${sub ? `<div class="stat-sub">${sub}</div>` : ''}
+    </div>`;
+  const avg = s.avg_rating
+    ? `${s.avg_rating}<span class="unit">/5</span>`
+    : '—';
+  document.getElementById("statsGrid").innerHTML =
+    card('stat-blue',   '📚', s.total, 'Total Tracked', 'problems in your library') +
+    card('stat-amber',  '🔥', s.due_today, 'Due Today', s.due_today ? 'ready to revise' : 'all caught up') +
+    card('stat-green',  '⭐', avg, 'Avg Rating', 'recall confidence') +
+    card('stat-violet', '🧩', Object.keys(s.by_platform || {}).length, 'Platforms', 'sources tracked');
 }
 
 function renderCharts(s) {
@@ -706,6 +822,101 @@ function renderRevisions(items) {
       </div>
     </div>
   `).join('');
+}
+
+function renderQueueNote() {
+  const el = document.getElementById('queueNote');
+  if (!el) return;
+  if (queueSize === 0 || queueSize == null) {
+    el.innerHTML = `Showing all due · <a onclick="openSettings()">change</a>`;
+  } else {
+    el.innerHTML = `Queue limit: ${queueSize}/day · <a onclick="openSettings()">change</a>`;
+  }
+}
+
+// --- Date-grouped lists (Revised / New Problem tabs) ---
+function fmtDayLabel(dayStr) {
+  if (!dayStr) return 'Unknown date';
+  const d = new Date(dayStr + 'T00:00:00');
+  if (isNaN(d)) return dayStr;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((today - d) / 86400000);
+  const full = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  if (diff === 0) return `Today · ${full}`;
+  if (diff === 1) return `Yesterday · ${full}`;
+  return full;
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d)) return '';
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+function metaTags(q) {
+  return `<span class="tag tag-platform">${esc(q.platform||'—')}</span>` +
+    (q.difficulty ? `<span class="tag tag-${q.difficulty}">${q.difficulty}</span>` : '') +
+    (q.self_rating ? `<span class="stars">${'★'.repeat(q.self_rating)}${'☆'.repeat(5-q.self_rating)}</span>` : '');
+}
+
+// Render a list of {q, day, ts, extra} entries grouped by day (newest first).
+function renderDateGroups(containerId, entries, emptyMsg) {
+  const el = document.getElementById(containerId);
+  if (!entries.length) { el.innerHTML = `<div class="empty">${emptyMsg}</div>`; return; }
+  const groups = {};
+  for (const e of entries) (groups[e.day] = groups[e.day] || []).push(e);
+  const days = Object.keys(groups).sort().reverse();
+  el.innerHTML = days.map(day => {
+    const rows = groups[day].map(e => `
+      <div class="item-row">
+        <div class="it-main">
+          <a href="${esc(e.q.url)}" target="_blank" class="it-title">${esc(e.q.title || e.q.url)}</a>
+          <div class="it-meta">${metaTags(e.q)}${e.extra || ''}</div>
+        </div>
+        <span class="it-time">${e.ts ? fmtTime(e.ts) : ''}</span>
+        ${historyBtn(e.q.id)}
+      </div>`).join('');
+    return `<div class="date-group">
+      <div class="date-head"><span class="d">${fmtDayLabel(day)}</span><span class="c">${groups[day].length} item${groups[day].length>1?'s':''}</span></div>
+      ${rows}
+    </div>`;
+  }).join('');
+}
+
+function renderRevised() {
+  const entries = [];
+  for (const q of allQuestions) {
+    const info = revInfo(q);
+    if (info.revision_count > 0) {
+      const ts = info.last_revised_at || q.last_reviewed;
+      entries.push({
+        q, ts,
+        day: (ts || '').slice(0, 10),
+        extra: `<span class="rev-count">${info.revision_count}× revised</span>`,
+      });
+    }
+  }
+  entries.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+  document.getElementById('revisedBadge').textContent = entries.length;
+  renderDateGroups('revisedList', entries, "No revisions yet — revise a problem and it'll show up here.");
+}
+
+function renderNewProblems() {
+  const entries = [];
+  for (const q of allQuestions) {
+    const info = revInfo(q);
+    if (info.revision_count === 0) {
+      const ts = q.solved_at;
+      entries.push({
+        q, ts,
+        day: info.first_solved_on || (ts || '').slice(0, 10),
+      });
+    }
+  }
+  entries.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+  document.getElementById('newBadge').textContent = entries.length;
+  renderDateGroups('newList', entries, 'No new problems waiting — nice, everything has been revised at least once.');
 }
 
 // Mirror of server/sm2.py — previews the next-due date for each rating before submitting.
@@ -863,7 +1074,51 @@ document.getElementById("searchBox").addEventListener("input", renderTable);
 // --- Settings / Platforms ---
 async function openSettings() {
   document.getElementById('settingsModal').classList.add('open');
+  document.getElementById('queueStatus').textContent = '';
   await loadPlatforms();
+  await loadQueueSize();
+}
+
+async function loadQueueSize() {
+  const input = document.getElementById('queueSizeInput');
+  try {
+    const s = await apiFetch('/settings').then(r => r.json());
+    queueSize = s.revision_queue_size;
+    input.value = s.revision_queue_size;
+  } catch {
+    if (queueSize != null) input.value = queueSize;
+  }
+}
+
+async function saveQueueSize() {
+  const input = document.getElementById('queueSizeInput');
+  const status = document.getElementById('queueStatus');
+  const val = parseInt(input.value, 10);
+  if (isNaN(val) || val < 0 || val > 500) {
+    status.textContent = 'Enter 0–500';
+    status.style.color = '#fca5a5';
+    return;
+  }
+  status.textContent = 'Saving...';
+  status.style.color = 'var(--muted)';
+  try {
+    const r = await apiFetch('/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ revision_queue_size: val }),
+    });
+    if (!r.ok) throw new Error();
+    queueSize = val;
+    status.textContent = 'Saved';
+    status.style.color = '#6ee7b7';
+    renderQueueNote();
+    // Refresh the due queue to reflect the new cap.
+    const revisions = await apiFetch('/revisions/today').then(r => r.json());
+    renderRevisions(revisions);
+  } catch {
+    status.textContent = 'Failed to save';
+    status.style.color = '#fca5a5';
+  }
 }
 
 function closeSettings() {
