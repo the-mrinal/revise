@@ -135,6 +135,51 @@ def get_revisions_due(
     return query.execute().data
 
 
+def count_revisions_done_today(user_id: str) -> int:
+    """Count distinct questions genuinely revised today.
+
+    A revision is a 'reviewed' event on a calendar day after the question's
+    first-ever solve day — the same definition used elsewhere (the extension
+    logs a 'reviewed' event even on a first solve, so first solves must be
+    excluded). Used to enforce the daily revision cap: the queue surfaces at
+    most (queue_size - this) cards, so completing a revision shrinks the queue
+    instead of pulling in a replacement.
+    """
+    today = date.today().isoformat()
+    client = get_client()
+    reviewed = (
+        client.table("question_events")
+        .select("question_id")
+        .eq("user_id", user_id)
+        .eq("event_type", "reviewed")
+        .gte("created_at", f"{today}T00:00:00")
+        .execute()
+    ).data
+    qids = {r["question_id"] for r in reviewed}
+    if not qids:
+        return 0
+    # Find each candidate question's first-ever solve day from the event log.
+    events = (
+        client.table("question_events")
+        .select("question_id, created_at")
+        .eq("user_id", user_id)
+        .in_("question_id", list(qids))
+        .in_("event_type", ["created", "reviewed"])
+        .order("created_at", desc=False)
+        .execute()
+    ).data
+    first_day: dict[int, str] = {}
+    for e in events:
+        qid = e["question_id"]
+        day = (e.get("created_at") or "")[:10]
+        if not day:
+            continue
+        if qid not in first_day or day < first_day[qid]:
+            first_day[qid] = day
+    # Only count questions first solved before today (genuine revisions).
+    return sum(1 for qid in qids if first_day.get(qid, today) < today)
+
+
 def update_question(user_id: str, qid: int, data: dict) -> dict | None:
     client = get_client()
     result = (
