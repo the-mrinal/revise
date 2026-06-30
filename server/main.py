@@ -19,6 +19,7 @@ from auth import (
     send_magic_link,
 )
 from database import (
+    count_revisions_done_today,
     delete_question,
     delete_user_platform,
     find_by_url,
@@ -245,8 +246,18 @@ def list_questions(user_id: str = Depends(get_current_user_id)):
 
 @app.get("/api/revisions/today")
 def revisions_today(user_id: str = Depends(get_current_user_id)):
-    limit = get_user_settings(user_id).get("revision_queue_size")
-    return get_revisions_due(user_id, date.today().isoformat(), limit=limit)
+    quota = get_user_settings(user_id).get("revision_queue_size")
+    today = date.today().isoformat()
+    # 0 / unset means no daily cap — surface every due revision.
+    if not quota or quota <= 0:
+        return get_revisions_due(user_id, today, limit=None)
+    # Fixed daily quota: only fill the slots not already used by today's
+    # completed revisions, so finishing one shrinks the queue rather than
+    # pulling in a replacement. Once the quota is met, the queue is empty.
+    remaining = quota - count_revisions_done_today(user_id)
+    if remaining <= 0:
+        return []
+    return get_revisions_due(user_id, today, limit=remaining)
 
 
 @app.get("/api/activity-summary")
