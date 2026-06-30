@@ -721,6 +721,7 @@ if (auth && auth.access_token) {
 }
 </script>
 <script src="/static/history.js"></script>
-<script src="https://bugs.mrinal.dev/widget.js" data-service="revise" defer></script>
+<script src="https://bugs.mrinal.dev/widget.js" data-service="revise" data-identity-jwt="localStorage:auth" defer></script>
+<script src="/static/bug-report.js" defer></script>
 </body>
 </html>
