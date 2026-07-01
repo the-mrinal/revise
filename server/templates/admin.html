@@ -88,6 +88,24 @@
   .adminbtn:disabled { opacity:.4; cursor:default; }
 
   .empty { color:var(--text-muted); font-size:13px; padding:24px 12px; text-align:center; }
+
+  /* activity expander */
+  .email { cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+  .email:hover { color:#fff; }
+  .caret { display:inline-block; font-size:10px; color:var(--text-muted); transition:transform .12s; }
+  .email.open .caret { transform:rotate(90deg); color:var(--accent); }
+  .activity-row td { background:#0c0c0c; }
+  .activity { padding:6px 4px 10px; }
+  .stats-row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .stat { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px 14px; min-width:84px; }
+  .stat-num { font-size:18px; font-weight:700; color:var(--accent); }
+  .stat-lbl { font-size:9px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); margin-top:2px; }
+  .brk { font-size:12px; color:var(--text-dim); margin:4px 0; }
+  .brk b { color:var(--text); font-weight:600; }
+  ul.recent { list-style:none; margin:6px 0 0; padding:0; }
+  ul.recent li { font-size:12px; padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:12px; }
+  ul.recent a { color:var(--accent); }
+  ul.recent .rmeta { color:var(--text-muted); white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -123,7 +141,7 @@
   </div>
 
   <div class="panel">
-    <h2>Users</h2>
+    <h2>Users <span style="text-transform:none;letter-spacing:0;color:var(--text-muted);font-weight:400">— click a name to see their activity</span></h2>
     <table>
       <thead>
         <tr><th>User</th><th>Features</th><th>Admin</th></tr>
@@ -187,14 +205,60 @@ function renderUsers(users) {
       (isSelf && u.is_admin ? 'disabled title="You can’t remove your own admin access"' : '') +
       ' onclick="toggleAdmin(this)">' + (u.is_admin ? 'Admin ✓' : 'Make admin') + '</button>';
     return '<tr>' +
-      '<td><div class="email">' + esc(u.email || '(no email)') +
+      '<td><div class="email" onclick="toggleActivity(\'' + esc(u.user_id) + '\',this)">' +
+        '<span class="caret">▸</span>' + esc(u.email || '(no email)') +
         (isSelf ? '<span class="badge">you</span>' : '') + '</div>' +
         '<div class="uid">' + esc(u.user_id) + '</div>' +
         '<div class="last">' + fmtDate(u.last_sign_in_at) + '</div></td>' +
       '<td><div class="flags">' + (flags || '<span class="uid">—</span>') + '</div></td>' +
       '<td>' + adminBtn + '</td>' +
+      '</tr>' +
+      '<tr class="activity-row" id="act-' + esc(u.user_id) + '" style="display:none">' +
+        '<td colspan="3"><div class="activity" id="actbody-' + esc(u.user_id) + '">Loading…</div></td>' +
       '</tr>';
   }).join('');
+}
+
+function statChip(label, val) {
+  return '<div class="stat"><div class="stat-num">' + esc(val) + '</div>' +
+    '<div class="stat-lbl">' + esc(label) + '</div></div>';
+}
+
+function renderActivity(a) {
+  if (!a || a.total === 0) return '<div class="uid" style="padding:6px 0">No questions tracked yet.</div>';
+  const diff = Object.entries(a.by_difficulty || {}).map(([k, v]) => esc(k) + ' ' + v).join(' · ') || '—';
+  const plat = Object.entries(a.by_platform || {}).map(([k, v]) => esc(k) + ' ' + v).join(' · ') || '—';
+  const recent = (a.recent || []).map(r =>
+    '<li>' + (r.url ? '<a href="' + esc(r.url) + '" target="_blank" rel="noopener">' + esc(r.title) + '</a>' : esc(r.title)) +
+    '<span class="rmeta">' + [r.difficulty, r.platform, r.self_rating ? '★' + r.self_rating : '', fmtDate(r.solved_at)]
+      .filter(Boolean).map(esc).join(' · ') + '</span></li>'
+  ).join('');
+  return '<div class="stats-row">' +
+      statChip('Solved', a.total) +
+      statChip('Due today', a.due_today) +
+      statChip('Avg rating', a.avg_rating || '—') +
+      statChip('Last active', a.last_active ? fmtDate(a.last_active) : 'never') +
+    '</div>' +
+    '<div class="brk"><b>Difficulty:</b> ' + diff + '</div>' +
+    '<div class="brk"><b>Platforms:</b> ' + plat + '</div>' +
+    (recent ? '<div class="brk"><b>Recent solves</b></div><ul class="recent">' + recent + '</ul>' : '');
+}
+
+async function toggleActivity(uid, el) {
+  const row = document.getElementById('act-' + uid);
+  if (!row) return;
+  const open = row.style.display !== 'none';
+  el.classList.toggle('open', !open);
+  row.style.display = open ? 'none' : '';
+  if (open || row.dataset.loaded) return;
+  const body = document.getElementById('actbody-' + uid);
+  try {
+    const a = await api('/admin/users/' + encodeURIComponent(uid) + '/activity');
+    body.innerHTML = renderActivity(a);
+    row.dataset.loaded = '1';
+  } catch (e) {
+    body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>';
+  }
 }
 
 async function loadUsers() {

@@ -34,6 +34,7 @@ from database import (
     get_revisions_due,
     get_stats,
     get_today_activity,
+    get_user_activity,
     get_user_features,
     get_user_platforms,
     get_user_settings,
@@ -82,6 +83,23 @@ def require_admin(claims: dict = Depends(get_current_claims)) -> dict:
     if not is_user_admin(claims["sub"]):
         raise HTTPException(status_code=403, detail="Admin access required")
     return claims
+
+
+def require_feature(feature: str):
+    """Dependency factory: allow only users granted `feature` (admins bypass).
+
+    Use to gate a protected endpoint, e.g.:
+        @app.get("/api/some-thing")
+        def some_thing(user_id: str = Depends(require_feature("research"))):
+            ...
+    """
+
+    def dependency(user_id: str = Depends(get_current_user_id)) -> str:
+        if is_user_admin(user_id) or feature in get_user_features(user_id):
+            return user_id
+        raise HTTPException(status_code=403, detail=f"Requires '{feature}' access")
+
+    return dependency
 
 
 PLATFORM_PATTERNS = {
@@ -249,6 +267,11 @@ def admin_list_features(_: dict = Depends(require_admin)):
 @app.get("/api/admin/users")
 def admin_list_users(_: dict = Depends(require_admin)):
     return list_all_users()
+
+
+@app.get("/api/admin/users/{uid}/activity")
+def admin_user_activity(uid: str, _: dict = Depends(require_admin)):
+    return get_user_activity(uid)
 
 
 @app.post("/api/admin/users/{uid}/features")

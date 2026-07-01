@@ -780,3 +780,56 @@ def list_all_users() -> list[dict]:
     # Signed-in-most-recently first, unknown last.
     users.sort(key=lambda x: (x["last_sign_in_at"] or ""), reverse=True)
     return users
+
+
+def get_user_activity(user_id: str) -> dict:
+    """Admin view: a compact activity summary for one user, in a single fetch.
+
+    Totals + difficulty/platform breakdown + due-today + avg rating + when they
+    were last active + their most recent solves."""
+    rows = get_all_questions(user_id)
+    by_difficulty: dict[str, int] = {}
+    by_platform: dict[str, int] = {}
+    ratings: list[int] = []
+    today = date.today().isoformat()
+    due_today = 0
+    last_active = None
+
+    for r in rows:
+        diff = r.get("difficulty") or "unknown"
+        by_difficulty[diff] = by_difficulty.get(diff, 0) + 1
+        plat = r.get("platform") or "unknown"
+        by_platform[plat] = by_platform.get(plat, 0) + 1
+        if r.get("self_rating"):
+            ratings.append(r["self_rating"])
+        if r.get("next_review") and r["next_review"] <= today:
+            due_today += 1
+        for ts in (r.get("solved_at"), r.get("last_reviewed")):
+            if ts and (last_active is None or ts > last_active):
+                last_active = ts
+
+    recent = sorted(
+        (r for r in rows if r.get("solved_at")),
+        key=lambda r: r["solved_at"],
+        reverse=True,
+    )[:5]
+
+    return {
+        "total": len(rows),
+        "by_difficulty": by_difficulty,
+        "by_platform": by_platform,
+        "due_today": due_today,
+        "avg_rating": round(sum(ratings) / len(ratings), 1) if ratings else 0,
+        "last_active": last_active,
+        "recent": [
+            {
+                "title": r.get("title") or r.get("url"),
+                "url": r.get("url"),
+                "difficulty": r.get("difficulty"),
+                "platform": r.get("platform"),
+                "solved_at": r.get("solved_at"),
+                "self_rating": r.get("self_rating"),
+            }
+            for r in recent
+        ],
+    }
