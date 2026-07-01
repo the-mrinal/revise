@@ -615,3 +615,274 @@ def get_flex_stats(user_id: str) -> dict | None:
         "top_patterns": top_patterns,
         "title": title,
     }
+
+
+# --- Access control: profiles, admin role, feature flags ---
+
+
+def ensure_user_profile(user_id: str, email: str | None = None) -> dict:
+    """Insert the user's profile row on first sight, refreshing the cached email.
+
+    Never flips is_admin — that is managed explicitly via set_user_admin. Returns
+    the stored profile ({user_id, email, is_admin})."""
+    client = get_client()
+    existing = (
+        client.table("user_profiles")
+        .select("user_id, email, is_admin")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        row = existing.data[0]
+        # Backfill/refresh the cached email if we learned it from the token.
+        if email and row.get("email") != email:
+            client.table("user_profiles").update(
+                {"email": email}
+            ).eq("user_id", user_id).execute()
+            row["email"] = email
+        return row
+    # Race-safe insert: ON CONFLICT DO NOTHING so two concurrent first-logins
+    # can't 500, and an existing is_admin is never clobbered back to false.
+    row = {"user_id": user_id, "email": email, "is_admin": False}
+    client.table("user_profiles").upsert(
+        row, on_conflict="user_id", ignore_duplicates=True
+    ).execute()
+    return row
+
+
+def is_user_admin(user_id: str) -> bool:
+    client = get_client()
+    result = (
+        client.table("user_profiles")
+        .select("is_admin")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(result.data and result.data[0].get("is_admin"))
+
+
+def set_user_admin(user_id: str, is_admin: bool) -> None:
+    client = get_client()
+    client.table("user_profiles").upsert(
+        {"user_id": user_id, "is_admin": is_admin},
+        on_conflict="user_id",
+    ).execute()
+
+
+def get_user_features(user_id: str) -> list[str]:
+    """Return the list of feature names granted to this user."""
+    client = get_client()
+    result = (
+        client.table("feature_access")
+        .select("feature")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return [r["feature"] for r in (result.data or [])]
+
+
+def grant_feature(user_id: str, feature: str) -> None:
+    client = get_client()
+    client.table("feature_access").upsert(
+        {"user_id": user_id, "feature": feature},
+        on_conflict="user_id,feature",
+    ).execute()
+
+
+def revoke_feature(user_id: str, feature: str) -> None:
+    client = get_client()
+    (
+        client.table("feature_access")
+        .delete()
+        .eq("user_id", user_id)
+        .eq("feature", feature)
+        .execute()
+    )
+
+
+def find_user_by_email(email: str) -> dict | None:
+    """Look up an auth user by email (case-insensitive) via the admin API.
+
+    Returns {user_id, email} or None if nobody has signed up with that email."""
+    target = email.strip().lower()
+    for u in _iter_auth_users():
+        if (u.get("email") or "").strip().lower() == target:
+            return {"user_id": u["id"], "email": u.get("email")}
+    return None
+
+
+def _iter_auth_users():
+    """Yield every auth user as a plain dict, paging through the admin API."""
+    client = get_client()
+    page = 1
+    while True:
+        resp = client.auth.admin.list_users(page=page, per_page=200)
+        # The supabase client returns either a list or an object with .users
+        users = resp if isinstance(resp, list) else getattr(resp, "users", []) or []
+        if not users:
+            break
+        for u in users:
+            last = (
+                getattr(u, "last_sign_in_at", None)
+                if not isinstance(u, dict)
+                else u.get("last_sign_in_at")
+            )
+            # The admin API returns a datetime; normalize to an ISO string so it
+            # sorts consistently (never str-vs-datetime) and JSON-serializes.
+            if hasattr(last, "isoformat"):
+                last = last.isoformat()
+            yield {
+                "id": str(getattr(u, "id", None) or u["id"]),
+                "email": getattr(u, "email", None) if not isinstance(u, dict) else u.get("email"),
+                "last_sign_in_at": last,
+            }
+        if len(users) < 200:
+            break
+        page += 1
+
+
+def list_all_users() -> list[dict]:
+    """List every auth user with their admin flag and granted features.
+
+    Used by the admin panel. Joins the Supabase auth user list with
+    user_profiles (is_admin) and feature_access (features)."""
+    client = get_client()
+    profiles = {
+        p["user_id"]: p
+        for p in (
+            client.table("user_profiles")
+            .select("user_id, is_admin")
+            .execute()
+            .data
+            or []
+        )
+    }
+    features_by_user: dict[str, list[str]] = defaultdict(list)
+    for row in (
+        client.table("feature_access").select("user_id, feature").execute().data or []
+    ):
+        features_by_user[row["user_id"]].append(row["feature"])
+
+    users = []
+    for u in _iter_auth_users():
+        uid = u["id"]
+        users.append(
+            {
+                "user_id": uid,
+                "email": u.get("email"),
+                "last_sign_in_at": u.get("last_sign_in_at"),
+                "is_admin": bool(profiles.get(uid, {}).get("is_admin")),
+                "features": sorted(features_by_user.get(uid, [])),
+            }
+        )
+    # Signed-in-most-recently first, unknown last.
+    users.sort(key=lambda x: (x["last_sign_in_at"] or ""), reverse=True)
+    return users
+
+
+def get_auth_email(user_id: str) -> str | None:
+    """Resolve a user's email from the auth admin API. None on any failure."""
+    try:
+        resp = get_client().auth.admin.get_user_by_id(user_id)
+        user = getattr(resp, "user", resp)
+        return getattr(user, "email", None)
+    except Exception:
+        return None
+
+
+def log_access_event(
+    actor_id: str,
+    actor_email: str | None,
+    target_id: str,
+    action: str,
+    feature: str | None = None,
+    target_email: str | None = None,
+) -> None:
+    """Append an access-control change to the audit log. Best-effort: an audit
+    failure must never break the actual grant/revoke it records."""
+    try:
+        get_client().table("access_audit").insert(
+            {
+                "actor_id": actor_id,
+                "actor_email": actor_email,
+                "target_id": target_id,
+                "target_email": target_email or get_auth_email(target_id),
+                "action": action,
+                "feature": feature,
+            }
+        ).execute()
+    except Exception as e:  # audit must never break the operation
+        print(f"[audit] failed to log {action} by {actor_email}: {e}")
+
+
+def get_recent_audit(limit: int = 50) -> list[dict]:
+    """Most-recent access-control changes, newest first. Returns [] if the audit
+    table isn't present yet (e.g. code deployed before migration 004)."""
+    try:
+        result = (
+            get_client()
+            .table("access_audit")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        print(f"[audit] read failed: {e}")
+        return []
+
+
+def get_user_activity(user_id: str) -> dict:
+    """Admin view: a compact activity summary for one user, in a single fetch.
+
+    Totals + difficulty/platform breakdown + due-today + avg rating + when they
+    were last active + their most recent solves."""
+    rows = get_all_questions(user_id)
+    by_difficulty: dict[str, int] = {}
+    by_platform: dict[str, int] = {}
+    ratings: list[int] = []
+    today = date.today().isoformat()
+    due_today = 0
+    last_active = None
+
+    for r in rows:
+        diff = r.get("difficulty") or "unknown"
+        by_difficulty[diff] = by_difficulty.get(diff, 0) + 1
+        plat = r.get("platform") or "unknown"
+        by_platform[plat] = by_platform.get(plat, 0) + 1
+        if r.get("self_rating"):
+            ratings.append(r["self_rating"])
+        if r.get("next_review") and r["next_review"] <= today:
+            due_today += 1
+        for ts in (r.get("solved_at"), r.get("last_reviewed")):
+            if ts and (last_active is None or ts > last_active):
+                last_active = ts
+
+    recent = sorted(
+        (r for r in rows if r.get("solved_at")),
+        key=lambda r: r["solved_at"],
+        reverse=True,
+    )[:5]
+
+    return {
+        "total": len(rows),
+        "by_difficulty": by_difficulty,
+        "by_platform": by_platform,
+        "due_today": due_today,
+        "avg_rating": round(sum(ratings) / len(ratings), 1) if ratings else 0,
+        "last_active": last_active,
+        "recent": [
+            {
+                "title": r.get("title") or r.get("url"),
+                "url": r.get("url"),
+                "difficulty": r.get("difficulty"),
+                "platform": r.get("platform"),
+                "solved_at": r.get("solved_at"),
+                "self_rating": r.get("self_rating"),
+            }
+            for r in recent
+        ],
+    }

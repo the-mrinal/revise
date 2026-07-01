@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Revise</title>
+<style>
+  :root {
+    --bg:#0a0a0a; --bg-card:#111; --bg-hover:#1a1a1a;
+    --border:#222; --border-light:#333;
+    --text:#e0e0e0; --text-dim:#888; --text-muted:#555;
+    --accent:#5b6abf; --accent-dim:#3d4a8a;
+    --green:#34d399; --yellow:#fbbf24; --red:#f87171;
+    --font-sans:-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:var(--font-sans); background:var(--bg); color:var(--text); min-height:100vh; }
+  a { color:var(--accent); text-decoration:none; }
+
+  header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:18px 28px; border-bottom:1px solid var(--border);
+    position:sticky; top:0; background:var(--bg); z-index:5;
+  }
+  header h1 { font-size:17px; font-weight:700; letter-spacing:-0.3px; }
+  header .sub { font-size:12px; color:var(--text-dim); margin-top:2px; }
+  header nav a { font-size:13px; margin-left:18px; color:var(--text-dim); }
+  header nav a:hover { color:var(--text); }
+
+  .wrap { max-width:1000px; margin:0 auto; padding:28px; }
+
+  .panel {
+    background:var(--bg-card); border:1px solid var(--border);
+    border-radius:10px; padding:20px 22px; margin-bottom:22px;
+  }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:1px; color:var(--text-dim); margin-bottom:14px; }
+
+  .grant-row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  input[type=email], select {
+    padding:9px 12px; border-radius:7px; border:1px solid var(--border);
+    background:var(--bg); color:var(--text); font-size:13px; font-family:inherit;
+  }
+  input[type=email] { flex:1; min-width:220px; }
+  input:focus, select:focus { outline:none; border-color:var(--accent); }
+  button.primary {
+    padding:9px 16px; border-radius:7px; border:none; cursor:pointer;
+    background:var(--accent); color:#fff; font-size:13px; font-weight:600;
+  }
+  button.primary:hover { background:var(--accent-dim); }
+  button.primary:disabled { opacity:.5; cursor:default; }
+
+  .msg { margin-top:12px; font-size:13px; min-height:18px; }
+  .msg.ok { color:var(--green); }
+  .msg.err { color:var(--red); }
+
+  table { width:100%; border-collapse:collapse; }
+  th {
+    text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.7px;
+    color:var(--text-muted); padding:10px 12px; border-bottom:1px solid var(--border);
+  }
+  td { padding:12px; border-bottom:1px solid var(--border); font-size:13px; vertical-align:middle; }
+  tr:hover td { background:var(--bg-hover); }
+  .email { font-weight:600; }
+  .uid { font-size:11px; color:var(--text-muted); font-family:ui-monospace,monospace; }
+  .last { font-size:11px; color:var(--text-dim); }
+  .badge {
+    display:inline-block; font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.5px; padding:2px 7px; border-radius:6px;
+    background:var(--accent-dim); color:#fff; margin-left:6px;
+  }
+
+  /* toggle pill */
+  .flags { display:flex; gap:8px; flex-wrap:wrap; }
+  .flag {
+    display:inline-flex; align-items:center; gap:6px; cursor:pointer;
+    font-size:12px; padding:5px 10px; border-radius:16px;
+    border:1px solid var(--border-light); color:var(--text-dim); user-select:none;
+  }
+  .flag.on { background:rgba(52,211,153,.12); border-color:var(--green); color:var(--green); }
+  .flag.busy { opacity:.5; cursor:default; }
+  .flag .dot { width:7px; height:7px; border-radius:50%; background:currentColor; }
+
+  .adminbtn {
+    font-size:11px; padding:5px 10px; border-radius:6px; cursor:pointer;
+    border:1px solid var(--border-light); background:transparent; color:var(--text-dim);
+  }
+  .adminbtn.on { border-color:var(--yellow); color:var(--yellow); }
+  .adminbtn:disabled { opacity:.4; cursor:default; }
+
+  .empty { color:var(--text-muted); font-size:13px; padding:24px 12px; text-align:center; }
+
+  /* activity expander */
+  .email { cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+  .email:hover { color:#fff; }
+  .caret { display:inline-block; font-size:10px; color:var(--text-muted); transition:transform .12s; }
+  .email.open .caret { transform:rotate(90deg); color:var(--accent); }
+  .activity-row td { background:#0c0c0c; }
+  .activity { padding:6px 4px 10px; }
+  .stats-row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .stat { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px 14px; min-width:84px; }
+  .stat-num { font-size:18px; font-weight:700; color:var(--accent); }
+  .stat-lbl { font-size:9px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); margin-top:2px; }
+  .brk { font-size:12px; color:var(--text-dim); margin:4px 0; }
+  .brk b { color:var(--text); font-weight:600; }
+  ul.recent { list-style:none; margin:6px 0 0; padding:0; }
+  ul.recent li { font-size:12px; padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:12px; }
+  ul.recent a { color:var(--accent); }
+  ul.recent .rmeta { color:var(--text-muted); white-space:nowrap; }
+
+  /* audit log */
+  ul.audit { list-style:none; margin:0; padding:0; }
+  ul.audit li { display:flex; align-items:center; gap:10px; padding:9px 2px; border-bottom:1px solid var(--border); font-size:13px; }
+  ul.audit li:last-child { border-bottom:none; }
+  .dotm { width:8px; height:8px; border-radius:50%; flex:none; background:var(--text-muted); }
+  .dotm.a-grant { background:var(--green); }
+  .dotm.a-revoke { background:var(--red); }
+  .atxt { flex:1; color:var(--text-dim); }
+  .atxt b { color:var(--text); font-weight:600; }
+  .pillish { font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid var(--border-light); color:var(--text); }
+  .atime { color:var(--text-muted); font-size:11px; white-space:nowrap; }
+</style>
+</head>
+<body>
+
+<!-- Admin-only gate (server also enforces on every /api/admin/* call). -->
+<script src="/static/access.js"></script>
+<script>window.__me = AccessGate.guard(null, { admin: true });</script>
+
+<header>
+  <div>
+    <h1>Admin · Access & Features</h1>
+    <div class="sub">Grant per-user access to gated features like <code>/research</code>.</div>
+  </div>
+  <nav>
+    <a href="/research">Research</a>
+    <a href="/dashboard">Dashboard</a>
+  </nav>
+</header>
+
+<div class="wrap">
+
+  <div class="panel">
+    <h2>Grant access by email</h2>
+    <div class="grant-row">
+      <input type="email" id="grant-email" placeholder="person@example.com" autocomplete="off">
+      <select id="grant-feature"></select>
+      <button class="primary" id="grant-btn" onclick="grantByEmail()">Grant</button>
+    </div>
+    <div class="msg" id="grant-msg"></div>
+    <div class="sub" style="margin-top:8px;color:var(--text-muted);font-size:12px">
+      The person must have signed in at least once (magic link) so their account exists.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Users <span style="text-transform:none;letter-spacing:0;color:var(--text-muted);font-weight:400">— click a name to see their activity</span></h2>
+    <table>
+      <thead>
+        <tr><th>User</th><th>Features</th><th>Admin</th></tr>
+      </thead>
+      <tbody id="users-body">
+        <tr><td colspan="3" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Recent changes</h2>
+    <div id="audit-body"><div class="empty">Loading…</div></div>
+  </div>
+
+</div>
+
+<script>
+const API = '/api';
+let FEATURES = [];
+let ME = null;
+
+async function api(path, options = {}) {
+  const auth = AccessGate.getAuth();
+  const headers = Object.assign(
+    { 'Content-Type': 'application/json' },
+    options.headers || {},
+    auth ? { Authorization: 'Bearer ' + auth.access_token } : {}
+  );
+  const resp = await fetch(API + path, Object.assign({}, options, { headers }));
+  if (!resp.ok) {
+    let detail = 'Request failed (' + resp.status + ')';
+    try { detail = (await resp.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return resp.status === 204 ? null : resp.json();
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+}
+
+function fmtDate(s) {
+  if (!s) return 'never signed in';
+  try { return new Date(s).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' }); }
+  catch { return s; }
+}
+
+function renderUsers(users) {
+  const body = document.getElementById('users-body');
+  if (!users.length) {
+    body.innerHTML = '<tr><td colspan="3" class="empty">No users yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = users.map(u => {
+    const flags = FEATURES.map(f => {
+      const on = u.features.indexOf(f) !== -1;
+      return '<span class="flag ' + (on ? 'on' : '') + '" ' +
+        'data-uid="' + esc(u.user_id) + '" data-feature="' + esc(f) + '" ' +
+        'onclick="toggleFeature(this)"><span class="dot"></span>' + esc(f) + '</span>';
+    }).join('');
+    const isSelf = ME && u.user_id === ME.user_id;
+    const adminBtn = '<button class="adminbtn ' + (u.is_admin ? 'on' : '') + '" ' +
+      'data-uid="' + esc(u.user_id) + '" data-admin="' + (u.is_admin ? '1' : '0') + '" ' +
+      (isSelf && u.is_admin ? 'disabled title="You can’t remove your own admin access"' : '') +
+      ' onclick="toggleAdmin(this)">' + (u.is_admin ? 'Admin ✓' : 'Make admin') + '</button>';
+    return '<tr>' +
+      '<td><div class="email" onclick="toggleActivity(\'' + esc(u.user_id) + '\',this)">' +
+        '<span class="caret">▸</span>' + esc(u.email || '(no email)') +
+        (isSelf ? '<span class="badge">you</span>' : '') + '</div>' +
+        '<div class="uid">' + esc(u.user_id) + '</div>' +
+        '<div class="last">' + fmtDate(u.last_sign_in_at) + '</div></td>' +
+      '<td><div class="flags">' + (flags || '<span class="uid">—</span>') + '</div></td>' +
+      '<td>' + adminBtn + '</td>' +
+      '</tr>' +
+      '<tr class="activity-row" id="act-' + esc(u.user_id) + '" style="display:none">' +
+        '<td colspan="3"><div class="activity" id="actbody-' + esc(u.user_id) + '">Loading…</div></td>' +
+      '</tr>';
+  }).join('');
+}
+
+function statChip(label, val) {
+  return '<div class="stat"><div class="stat-num">' + esc(val) + '</div>' +
+    '<div class="stat-lbl">' + esc(label) + '</div></div>';
+}
+
+function renderActivity(a) {
+  if (!a || a.total === 0) return '<div class="uid" style="padding:6px 0">No questions tracked yet.</div>';
+  const diff = Object.entries(a.by_difficulty || {}).map(([k, v]) => esc(k) + ' ' + v).join(' · ') || '—';
+  const plat = Object.entries(a.by_platform || {}).map(([k, v]) => esc(k) + ' ' + v).join(' · ') || '—';
+  const recent = (a.recent || []).map(r =>
+    '<li>' + (r.url ? '<a href="' + esc(r.url) + '" target="_blank" rel="noopener">' + esc(r.title) + '</a>' : esc(r.title)) +
+    '<span class="rmeta">' + [r.difficulty, r.platform, r.self_rating ? '★' + r.self_rating : '', fmtDate(r.solved_at)]
+      .filter(Boolean).map(esc).join(' · ') + '</span></li>'
+  ).join('');
+  return '<div class="stats-row">' +
+      statChip('Solved', a.total) +
+      statChip('Due today', a.due_today) +
+      statChip('Avg rating', a.avg_rating || '—') +
+      statChip('Last active', a.last_active ? fmtDate(a.last_active) : 'never') +
+    '</div>' +
+    '<div class="brk"><b>Difficulty:</b> ' + diff + '</div>' +
+    '<div class="brk"><b>Platforms:</b> ' + plat + '</div>' +
+    (recent ? '<div class="brk"><b>Recent solves</b></div><ul class="recent">' + recent + '</ul>' : '');
+}
+
+async function toggleActivity(uid, el) {
+  const row = document.getElementById('act-' + uid);
+  if (!row) return;
+  const open = row.style.display !== 'none';
+  el.classList.toggle('open', !open);
+  row.style.display = open ? 'none' : '';
+  if (open || row.dataset.loaded) return;
+  const body = document.getElementById('actbody-' + uid);
+  try {
+    const a = await api('/admin/users/' + encodeURIComponent(uid) + '/activity');
+    body.innerHTML = renderActivity(a);
+    row.dataset.loaded = '1';
+  } catch (e) {
+    body.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>';
+  }
+}
+
+async function loadUsers() {
+  try {
+    const users = await api('/admin/users');
+    renderUsers(users);
+  } catch (e) {
+    document.getElementById('users-body').innerHTML =
+      '<tr><td colspan="3" class="empty">' + esc(e.message) + '</td></tr>';
+  }
+}
+
+function fmtDateTime(s) {
+  if (!s) return '';
+  try { return new Date(s).toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
+  catch { return s; }
+}
+
+const ACTION_LABEL = {
+  grant: 'granted', revoke: 'revoked',
+  make_admin: 'made admin', remove_admin: 'removed admin',
+};
+const ACTION_CLASS = {
+  grant: 'a-grant', revoke: 'a-revoke', make_admin: 'a-grant', remove_admin: 'a-revoke',
+};
+
+function renderAudit(entries) {
+  const el = document.getElementById('audit-body');
+  if (!entries.length) { el.innerHTML = '<div class="empty">No changes logged yet.</div>'; return; }
+  el.innerHTML = '<ul class="audit">' + entries.map(e => {
+    const actor = esc(e.actor_email || e.actor_id || 'someone');
+    const target = esc(e.target_email || e.target_id || 'a user');
+    const verb = ACTION_LABEL[e.action] || esc(e.action);
+    const feat = e.feature ? ' <span class="pillish">' + esc(e.feature) + '</span>' : '';
+    const cls = ACTION_CLASS[e.action] || '';
+    return '<li><span class="dotm ' + cls + '"></span>' +
+      '<span class="atxt"><b>' + actor + '</b> ' + verb + feat +
+      (e.action === 'grant' || e.action === 'revoke' ? ' for ' : ' ') +
+      '<b>' + target + '</b></span>' +
+      '<span class="atime">' + esc(fmtDateTime(e.created_at)) + '</span></li>';
+  }).join('') + '</ul>';
+}
+
+async function loadAudit() {
+  try {
+    renderAudit(await api('/admin/audit'));
+  } catch (e) {
+    document.getElementById('audit-body').innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+  }
+}
+
+async function toggleFeature(el) {
+  if (el.classList.contains('busy')) return;
+  const uid = el.dataset.uid, feature = el.dataset.feature;
+  const granted = !el.classList.contains('on');
+  el.classList.add('busy');
+  try {
+    await api('/admin/users/' + encodeURIComponent(uid) + '/features', {
+      method: 'POST',
+      body: JSON.stringify({ feature, granted }),
+    });
+    el.classList.toggle('on', granted);
+    loadAudit();
+  } catch (e) {
+    alert('Could not update: ' + e.message);
+  } finally {
+    el.classList.remove('busy');
+  }
+}
+
+async function toggleAdmin(el) {
+  const uid = el.dataset.uid;
+  const makeAdmin = el.dataset.admin !== '1';
+  if (!makeAdmin && !confirm('Remove admin access for this user?')) return;
+  el.disabled = true;
+  try {
+    await api('/admin/users/' + encodeURIComponent(uid) + '/admin', {
+      method: 'POST',
+      body: JSON.stringify({ is_admin: makeAdmin }),
+    });
+    await loadUsers();
+    loadAudit();
+  } catch (e) {
+    alert('Could not update: ' + e.message);
+    el.disabled = false;
+  }
+}
+
+async function grantByEmail() {
+  const emailEl = document.getElementById('grant-email');
+  const featureEl = document.getElementById('grant-feature');
+  const msg = document.getElementById('grant-msg');
+  const btn = document.getElementById('grant-btn');
+  const email = emailEl.value.trim();
+  msg.className = 'msg'; msg.textContent = '';
+  if (!email) { msg.className = 'msg err'; msg.textContent = 'Enter an email.'; return; }
+  btn.disabled = true;
+  try {
+    const res = await api('/admin/grant-by-email', {
+      method: 'POST',
+      body: JSON.stringify({ email, feature: featureEl.value }),
+    });
+    msg.className = 'msg ok';
+    msg.textContent = 'Granted “' + featureEl.value + '” to ' + res.email + '.';
+    emailEl.value = '';
+    await loadUsers();
+    loadAudit();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+(async function init() {
+  ME = await window.__me;           // resolves only if admin
+  FEATURES = await api('/admin/features');
+  const sel = document.getElementById('grant-feature');
+  sel.innerHTML = FEATURES.map(f => '<option value="' + esc(f) + '">' + esc(f) + '</option>').join('');
+  await loadUsers();
+  loadAudit();
+})();
+</script>
+</body>
+</html>

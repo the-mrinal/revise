@@ -70,15 +70,21 @@ def verify_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
 
 
+def get_current_claims(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+) -> dict:
+    """FastAPI dependency — returns the verified JWT payload (sub, email, ...)."""
+    payload = verify_token(credentials.credentials)
+    if not payload.get("sub"):
+        raise HTTPException(status_code=401, detail="Token missing sub claim")
+    return payload
+
+
 def get_current_user_id(
     credentials: HTTPAuthorizationCredentials = Security(security),
 ) -> str:
     """FastAPI dependency — extracts user_id from Bearer token's sub claim."""
-    payload = verify_token(credentials.credentials)
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Token missing sub claim")
-    return user_id
+    return get_current_claims(credentials)["sub"]
 
 
 def send_magic_link(email: str) -> None:

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from auth import (
     exchange_code_for_session,
+    get_current_claims,
     get_current_user_id,
     refresh_session,
     send_magic_link,
@@ -22,23 +23,34 @@ from database import (
     count_revisions_done_today,
     delete_question,
     delete_user_platform,
+    ensure_user_profile,
     find_by_url,
+    find_user_by_email,
     get_all_questions,
     get_flex_stats,
+    get_recent_audit,
     get_question,
     get_question_events,
     get_questions_activity_summary,
     get_revisions_due,
     get_stats,
     get_today_activity,
+    get_user_activity,
+    get_user_features,
     get_user_platforms,
     get_user_settings,
+    grant_feature,
     increment_attempts,
     insert_event,
     insert_question,
     insert_user_platform,
+    is_user_admin,
+    list_all_users,
+    log_access_event,
     merge_duplicates,
     merge_duplicates_for_question,
+    revoke_feature,
+    set_user_admin,
     update_question,
     update_question_sm2,
     upsert_user_settings,
@@ -61,6 +73,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Named features that can be granted per-user via the admin panel (/admin).
+# Add a feature here, then gate its page/endpoint on get_user_features().
+FEATURES = ["research"]
+
+
+def require_admin(claims: dict = Depends(get_current_claims)) -> dict:
+    """Dependency allowing only admin users. Returns the JWT claims."""
+    ensure_user_profile(claims["sub"], claims.get("email"))
+    if not is_user_admin(claims["sub"]):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return claims
+
+
+def require_feature(feature: str):
+    """Dependency factory: allow only users granted `feature` (admins bypass).
+
+    Use to gate a protected endpoint, e.g.:
+        @app.get("/api/some-thing")
+        def some_thing(user_id: str = Depends(require_feature("research"))):
+            ...
+    """
+
+    def dependency(user_id: str = Depends(get_current_user_id)) -> str:
+        if is_user_admin(user_id) or feature in get_user_features(user_id):
+            return user_id
+        raise HTTPException(status_code=403, detail=f"Requires '{feature}' access")
+
+    return dependency
+
 
 PLATFORM_PATTERNS = {
     "leetcode": r"leetcode\.com",
@@ -148,6 +190,20 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class FeatureToggle(BaseModel):
+    feature: str
+    granted: bool
+
+
+class AdminToggle(BaseModel):
+    is_admin: bool
+
+
+class GrantByEmail(BaseModel):
+    email: str
+    feature: str
+
+
 # --- Auth endpoints (no auth required) ---
 
 
@@ -182,6 +238,89 @@ def auth_callback(
 def auth_refresh(req: RefreshRequest):
     tokens = refresh_session(req.refresh_token)
     return tokens
+
+
+# --- Identity & access ---
+
+
+@app.get("/api/me")
+def me(claims: dict = Depends(get_current_claims)):
+    """Identity + access for the current user. Also upserts the profile so the
+    admin panel can list users who have signed in at least once."""
+    user_id = claims["sub"]
+    email = claims.get("email")
+    ensure_user_profile(user_id, email)
+    return {
+        "user_id": user_id,
+        "email": email,
+        "is_admin": is_user_admin(user_id),
+        "features": get_user_features(user_id),
+    }
+
+
+# --- Admin panel (admin role required) ---
+
+
+@app.get("/api/admin/features")
+def admin_list_features(_: dict = Depends(require_admin)):
+    return FEATURES
+
+
+@app.get("/api/admin/users")
+def admin_list_users(_: dict = Depends(require_admin)):
+    return list_all_users()
+
+
+@app.get("/api/admin/audit")
+def admin_audit(_: dict = Depends(require_admin)):
+    return get_recent_audit()
+
+
+@app.get("/api/admin/users/{uid}/activity")
+def admin_user_activity(uid: str, _: dict = Depends(require_admin)):
+    return get_user_activity(uid)
+
+
+@app.post("/api/admin/users/{uid}/features")
+def admin_set_feature(uid: str, body: FeatureToggle, claims: dict = Depends(require_admin)):
+    if body.feature not in FEATURES:
+        raise HTTPException(400, f"Unknown feature: {body.feature}")
+    if body.granted:
+        grant_feature(uid, body.feature)
+    else:
+        revoke_feature(uid, body.feature)
+    log_access_event(
+        claims["sub"], claims.get("email"), uid,
+        "grant" if body.granted else "revoke", feature=body.feature,
+    )
+    return {"ok": True}
+
+
+@app.post("/api/admin/users/{uid}/admin")
+def admin_set_admin(uid: str, body: AdminToggle, claims: dict = Depends(require_admin)):
+    if uid == claims["sub"] and not body.is_admin:
+        raise HTTPException(400, "You can't remove your own admin access")
+    set_user_admin(uid, body.is_admin)
+    log_access_event(
+        claims["sub"], claims.get("email"), uid,
+        "make_admin" if body.is_admin else "remove_admin",
+    )
+    return {"ok": True}
+
+
+@app.post("/api/admin/grant-by-email")
+def admin_grant_by_email(body: GrantByEmail, claims: dict = Depends(require_admin)):
+    if body.feature not in FEATURES:
+        raise HTTPException(400, f"Unknown feature: {body.feature}")
+    user = find_user_by_email(body.email)
+    if not user:
+        raise HTTPException(404, "No user has signed in with that email yet")
+    grant_feature(user["user_id"], body.feature)
+    log_access_event(
+        claims["sub"], claims.get("email"), user["user_id"],
+        "grant", feature=body.feature, target_email=user["email"],
+    )
+    return {"ok": True, "user_id": user["user_id"], "email": user["email"]}
 
 
 # --- Protected API endpoints ---
@@ -531,6 +670,14 @@ def flex_page_user(user_id: str):
 @app.get("/research", response_class=HTMLResponse)
 def research_page():
     with open("templates/research.html") as f:
+        return f.read()
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page():
+    # Access is enforced client-side (checks /api/me.is_admin) and server-side
+    # on every /api/admin/* call via the require_admin dependency.
+    with open("templates/admin.html") as f:
         return f.read()
 
 
