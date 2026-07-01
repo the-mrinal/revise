@@ -724,14 +724,19 @@ def _iter_auth_users():
         if not users:
             break
         for u in users:
+            last = (
+                getattr(u, "last_sign_in_at", None)
+                if not isinstance(u, dict)
+                else u.get("last_sign_in_at")
+            )
+            # The admin API returns a datetime; normalize to an ISO string so it
+            # sorts consistently (never str-vs-datetime) and JSON-serializes.
+            if hasattr(last, "isoformat"):
+                last = last.isoformat()
             yield {
                 "id": str(getattr(u, "id", None) or u["id"]),
                 "email": getattr(u, "email", None) if not isinstance(u, dict) else u.get("email"),
-                "last_sign_in_at": (
-                    getattr(u, "last_sign_in_at", None)
-                    if not isinstance(u, dict)
-                    else u.get("last_sign_in_at")
-                ),
+                "last_sign_in_at": last,
             }
         if len(users) < 200:
             break
