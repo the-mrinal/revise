@@ -21,32 +21,39 @@
     document.documentElement.style.visibility = '';
   }
 
-  function lockScreen(title, message) {
+  function lockScreen(title, message, linkHtml) {
     reveal();
+    if (linkHtml === undefined) {
+      linkHtml =
+        '<a href="/dashboard" style="color:#5b6abf;text-decoration:none;font-weight:600">' +
+        'Go to Dashboard →</a>';
+    }
     document.body.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:center;' +
       'height:100vh;flex-direction:column;gap:14px;text-align:center;padding:24px;' +
       'font-family:system-ui,-apple-system,sans-serif;color:#8a8f98;background:#0d0d10">' +
       '<h2 style="color:#e8e8ea;margin:0;font-size:22px">' + title + '</h2>' +
       '<p style="margin:0;max-width:440px;line-height:1.55">' + message + '</p>' +
-      '<a href="/dashboard" style="color:#5b6abf;text-decoration:none;font-weight:600">' +
-      'Go to Dashboard →</a></div>';
+      linkHtml + '</div>';
   }
 
   // Fetch /api/me, transparently refreshing the access token once on 401.
+  // Returns the identity object, or null when the visitor is simply not signed
+  // in (no/invalid session). Throws on a transport/server error so the caller
+  // can show a "couldn't verify" screen rather than a misleading login prompt.
   async function fetchMe() {
     const auth = getAuth();
     if (!auth) return null;
     let resp = await fetch(API_BASE + '/me', {
       headers: { Authorization: 'Bearer ' + auth.access_token },
     });
-    if (resp.status === 401 && auth.refresh_token) {
+    if ((resp.status === 401 || resp.status === 403) && auth.refresh_token) {
       const r = await fetch(API_BASE + '/auth/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: auth.refresh_token }),
       });
-      if (!r.ok) return null;
+      if (!r.ok) return null; // refresh failed → treat as signed out
       const tokens = await r.json();
       localStorage.setItem(
         'auth',
@@ -59,7 +66,8 @@
         headers: { Authorization: 'Bearer ' + tokens.access_token },
       });
     }
-    if (!resp.ok) return null;
+    if (resp.status === 401 || resp.status === 403) return null; // signed out
+    if (!resp.ok) throw new Error('me failed: ' + resp.status); // 5xx etc.
     return resp.json();
   }
 
@@ -72,7 +80,19 @@
   async function guard(feature, opts) {
     opts = opts || {};
     document.documentElement.style.visibility = 'hidden';
-    const me = await fetchMe();
+    let me;
+    try {
+      me = await fetchMe();
+    } catch (e) {
+      // Transport or server error — never leave the page stuck hidden.
+      lockScreen(
+        'Couldn’t verify access',
+        'Something went wrong checking your access. Please try again.',
+        '<a href="" onclick="location.reload();return false" ' +
+          'style="color:#5b6abf;text-decoration:none;font-weight:600">Retry</a>'
+      );
+      return new Promise(function () {});
+    }
     if (!me) {
       lockScreen(
         'Sign in required',

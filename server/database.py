@@ -642,8 +642,12 @@ def ensure_user_profile(user_id: str, email: str | None = None) -> dict:
             ).eq("user_id", user_id).execute()
             row["email"] = email
         return row
+    # Race-safe insert: ON CONFLICT DO NOTHING so two concurrent first-logins
+    # can't 500, and an existing is_admin is never clobbered back to false.
     row = {"user_id": user_id, "email": email, "is_admin": False}
-    client.table("user_profiles").insert(row).execute()
+    client.table("user_profiles").upsert(
+        row, on_conflict="user_id", ignore_duplicates=True
+    ).execute()
     return row
 
 
