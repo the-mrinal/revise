@@ -782,6 +782,59 @@ def list_all_users() -> list[dict]:
     return users
 
 
+def get_auth_email(user_id: str) -> str | None:
+    """Resolve a user's email from the auth admin API. None on any failure."""
+    try:
+        resp = get_client().auth.admin.get_user_by_id(user_id)
+        user = getattr(resp, "user", resp)
+        return getattr(user, "email", None)
+    except Exception:
+        return None
+
+
+def log_access_event(
+    actor_id: str,
+    actor_email: str | None,
+    target_id: str,
+    action: str,
+    feature: str | None = None,
+    target_email: str | None = None,
+) -> None:
+    """Append an access-control change to the audit log. Best-effort: an audit
+    failure must never break the actual grant/revoke it records."""
+    try:
+        get_client().table("access_audit").insert(
+            {
+                "actor_id": actor_id,
+                "actor_email": actor_email,
+                "target_id": target_id,
+                "target_email": target_email or get_auth_email(target_id),
+                "action": action,
+                "feature": feature,
+            }
+        ).execute()
+    except Exception as e:  # audit must never break the operation
+        print(f"[audit] failed to log {action} by {actor_email}: {e}")
+
+
+def get_recent_audit(limit: int = 50) -> list[dict]:
+    """Most-recent access-control changes, newest first. Returns [] if the audit
+    table isn't present yet (e.g. code deployed before migration 004)."""
+    try:
+        result = (
+            get_client()
+            .table("access_audit")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        print(f"[audit] read failed: {e}")
+        return []
+
+
 def get_user_activity(user_id: str) -> dict:
     """Admin view: a compact activity summary for one user, in a single fetch.
 

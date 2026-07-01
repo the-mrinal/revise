@@ -106,6 +106,18 @@
   ul.recent li { font-size:12px; padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:12px; }
   ul.recent a { color:var(--accent); }
   ul.recent .rmeta { color:var(--text-muted); white-space:nowrap; }
+
+  /* audit log */
+  ul.audit { list-style:none; margin:0; padding:0; }
+  ul.audit li { display:flex; align-items:center; gap:10px; padding:9px 2px; border-bottom:1px solid var(--border); font-size:13px; }
+  ul.audit li:last-child { border-bottom:none; }
+  .dotm { width:8px; height:8px; border-radius:50%; flex:none; background:var(--text-muted); }
+  .dotm.a-grant { background:var(--green); }
+  .dotm.a-revoke { background:var(--red); }
+  .atxt { flex:1; color:var(--text-dim); }
+  .atxt b { color:var(--text); font-weight:600; }
+  .pillish { font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid var(--border-light); color:var(--text); }
+  .atime { color:var(--text-muted); font-size:11px; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -150,6 +162,11 @@
         <tr><td colspan="3" class="empty">Loading…</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <div class="panel">
+    <h2>Recent changes</h2>
+    <div id="audit-body"><div class="empty">Loading…</div></div>
   </div>
 
 </div>
@@ -271,6 +288,45 @@ async function loadUsers() {
   }
 }
 
+function fmtDateTime(s) {
+  if (!s) return '';
+  try { return new Date(s).toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
+  catch { return s; }
+}
+
+const ACTION_LABEL = {
+  grant: 'granted', revoke: 'revoked',
+  make_admin: 'made admin', remove_admin: 'removed admin',
+};
+const ACTION_CLASS = {
+  grant: 'a-grant', revoke: 'a-revoke', make_admin: 'a-grant', remove_admin: 'a-revoke',
+};
+
+function renderAudit(entries) {
+  const el = document.getElementById('audit-body');
+  if (!entries.length) { el.innerHTML = '<div class="empty">No changes logged yet.</div>'; return; }
+  el.innerHTML = '<ul class="audit">' + entries.map(e => {
+    const actor = esc(e.actor_email || e.actor_id || 'someone');
+    const target = esc(e.target_email || e.target_id || 'a user');
+    const verb = ACTION_LABEL[e.action] || esc(e.action);
+    const feat = e.feature ? ' <span class="pillish">' + esc(e.feature) + '</span>' : '';
+    const cls = ACTION_CLASS[e.action] || '';
+    return '<li><span class="dotm ' + cls + '"></span>' +
+      '<span class="atxt"><b>' + actor + '</b> ' + verb + feat +
+      (e.action === 'grant' || e.action === 'revoke' ? ' for ' : ' ') +
+      '<b>' + target + '</b></span>' +
+      '<span class="atime">' + esc(fmtDateTime(e.created_at)) + '</span></li>';
+  }).join('') + '</ul>';
+}
+
+async function loadAudit() {
+  try {
+    renderAudit(await api('/admin/audit'));
+  } catch (e) {
+    document.getElementById('audit-body').innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+  }
+}
+
 async function toggleFeature(el) {
   if (el.classList.contains('busy')) return;
   const uid = el.dataset.uid, feature = el.dataset.feature;
@@ -282,6 +338,7 @@ async function toggleFeature(el) {
       body: JSON.stringify({ feature, granted }),
     });
     el.classList.toggle('on', granted);
+    loadAudit();
   } catch (e) {
     alert('Could not update: ' + e.message);
   } finally {
@@ -300,6 +357,7 @@ async function toggleAdmin(el) {
       body: JSON.stringify({ is_admin: makeAdmin }),
     });
     await loadUsers();
+    loadAudit();
   } catch (e) {
     alert('Could not update: ' + e.message);
     el.disabled = false;
@@ -324,6 +382,7 @@ async function grantByEmail() {
     msg.textContent = 'Granted “' + featureEl.value + '” to ' + res.email + '.';
     emailEl.value = '';
     await loadUsers();
+    loadAudit();
   } catch (e) {
     msg.className = 'msg err';
     msg.textContent = e.message;
@@ -338,6 +397,7 @@ async function grantByEmail() {
   const sel = document.getElementById('grant-feature');
   sel.innerHTML = FEATURES.map(f => '<option value="' + esc(f) + '">' + esc(f) + '</option>').join('');
   await loadUsers();
+  loadAudit();
 })();
 </script>
 </body>

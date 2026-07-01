@@ -28,6 +28,7 @@ from database import (
     find_user_by_email,
     get_all_questions,
     get_flex_stats,
+    get_recent_audit,
     get_question,
     get_question_events,
     get_questions_activity_summary,
@@ -45,6 +46,7 @@ from database import (
     insert_user_platform,
     is_user_admin,
     list_all_users,
+    log_access_event,
     merge_duplicates,
     merge_duplicates_for_question,
     revoke_feature,
@@ -269,19 +271,28 @@ def admin_list_users(_: dict = Depends(require_admin)):
     return list_all_users()
 
 
+@app.get("/api/admin/audit")
+def admin_audit(_: dict = Depends(require_admin)):
+    return get_recent_audit()
+
+
 @app.get("/api/admin/users/{uid}/activity")
 def admin_user_activity(uid: str, _: dict = Depends(require_admin)):
     return get_user_activity(uid)
 
 
 @app.post("/api/admin/users/{uid}/features")
-def admin_set_feature(uid: str, body: FeatureToggle, _: dict = Depends(require_admin)):
+def admin_set_feature(uid: str, body: FeatureToggle, claims: dict = Depends(require_admin)):
     if body.feature not in FEATURES:
         raise HTTPException(400, f"Unknown feature: {body.feature}")
     if body.granted:
         grant_feature(uid, body.feature)
     else:
         revoke_feature(uid, body.feature)
+    log_access_event(
+        claims["sub"], claims.get("email"), uid,
+        "grant" if body.granted else "revoke", feature=body.feature,
+    )
     return {"ok": True}
 
 
@@ -290,17 +301,25 @@ def admin_set_admin(uid: str, body: AdminToggle, claims: dict = Depends(require_
     if uid == claims["sub"] and not body.is_admin:
         raise HTTPException(400, "You can't remove your own admin access")
     set_user_admin(uid, body.is_admin)
+    log_access_event(
+        claims["sub"], claims.get("email"), uid,
+        "make_admin" if body.is_admin else "remove_admin",
+    )
     return {"ok": True}
 
 
 @app.post("/api/admin/grant-by-email")
-def admin_grant_by_email(body: GrantByEmail, _: dict = Depends(require_admin)):
+def admin_grant_by_email(body: GrantByEmail, claims: dict = Depends(require_admin)):
     if body.feature not in FEATURES:
         raise HTTPException(400, f"Unknown feature: {body.feature}")
     user = find_user_by_email(body.email)
     if not user:
         raise HTTPException(404, "No user has signed in with that email yet")
     grant_feature(user["user_id"], body.feature)
+    log_access_event(
+        claims["sub"], claims.get("email"), user["user_id"],
+        "grant", feature=body.feature, target_email=user["email"],
+    )
     return {"ok": True, "user_id": user["user_id"], "email": user["email"]}
 
 
