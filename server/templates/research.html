@@ -461,6 +461,11 @@
 </head>
 <body>
 
+<!-- ─── Access gate: requires the DB-backed 'research' feature (admins bypass).
+     Managed at /admin. Hides the page until access is confirmed. ─── -->
+<script src="/static/access.js"></script>
+<script>window.__me = AccessGate.guard('research');</script>
+
 <!-- ─── Sidebar ─── -->
 <aside class="sidebar">
   <div class="sidebar-header">
@@ -1753,35 +1758,8 @@ const urlCat = new URLSearchParams(window.location.search).get('cat');
 const initCat = urlCat && LEARNING_ORDER.find(c => c.key === urlCat) ? urlCat : LEARNING_ORDER[0].key;
 toggleCat(initCat);
 
-// ─── Access gate: only allow specific emails ───
-// To grant access: add an email to this list.
-// To allow ANY logged-in user: set ALLOW_ALL = true.
-const ALLOW_ALL = false;
-const ALLOWED_EMAILS = [
-  'dmrinal626@gmail.com',
-  'bibhashchandra4850@gmail.com',
-  // add more emails here to grant Research access
-].map(e => e.trim().toLowerCase());
-function getEmailFromToken() {
-  const auth = getAuth();
-  if (!auth) return null;
-  try {
-    const email = JSON.parse(atob(auth.access_token.split('.')[1])).email;
-    return email ? email.trim().toLowerCase() : null;
-  } catch { return null; }
-}
-(function checkAccess() {
-  const email = getEmailFromToken();
-  console.log('[research access] token email:', email);
-  if (!email || (!ALLOW_ALL && !ALLOWED_EMAILS.includes(email))) {
-    document.body.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px;font-family:var(--font-sans);color:#888">
-      <h2 style="color:#e0e0e0">Access Restricted</h2>
-      <p>This page is only available to authorized users.</p>
-      <a href="/dashboard" style="color:#5b6abf">Go to Dashboard</a>
-    </div>`;
-    return;
-  }
-})();
+// Access is enforced by AccessGate.guard('research') at the top of <body>,
+// backed by the DB feature-flag system and managed at /admin.
 
 // Auto-connect if auth exists
 if (getAuth()) connectRevise();

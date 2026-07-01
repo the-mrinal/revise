@@ -615,3 +615,159 @@ def get_flex_stats(user_id: str) -> dict | None:
         "top_patterns": top_patterns,
         "title": title,
     }
+
+
+# --- Access control: profiles, admin role, feature flags ---
+
+
+def ensure_user_profile(user_id: str, email: str | None = None) -> dict:
+    """Insert the user's profile row on first sight, refreshing the cached email.
+
+    Never flips is_admin — that is managed explicitly via set_user_admin. Returns
+    the stored profile ({user_id, email, is_admin})."""
+    client = get_client()
+    existing = (
+        client.table("user_profiles")
+        .select("user_id, email, is_admin")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        row = existing.data[0]
+        # Backfill/refresh the cached email if we learned it from the token.
+        if email and row.get("email") != email:
+            client.table("user_profiles").update(
+                {"email": email}
+            ).eq("user_id", user_id).execute()
+            row["email"] = email
+        return row
+    row = {"user_id": user_id, "email": email, "is_admin": False}
+    client.table("user_profiles").insert(row).execute()
+    return row
+
+
+def is_user_admin(user_id: str) -> bool:
+    client = get_client()
+    result = (
+        client.table("user_profiles")
+        .select("is_admin")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(result.data and result.data[0].get("is_admin"))
+
+
+def set_user_admin(user_id: str, is_admin: bool) -> None:
+    client = get_client()
+    client.table("user_profiles").upsert(
+        {"user_id": user_id, "is_admin": is_admin},
+        on_conflict="user_id",
+    ).execute()
+
+
+def get_user_features(user_id: str) -> list[str]:
+    """Return the list of feature names granted to this user."""
+    client = get_client()
+    result = (
+        client.table("feature_access")
+        .select("feature")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return [r["feature"] for r in (result.data or [])]
+
+
+def grant_feature(user_id: str, feature: str) -> None:
+    client = get_client()
+    client.table("feature_access").upsert(
+        {"user_id": user_id, "feature": feature},
+        on_conflict="user_id,feature",
+    ).execute()
+
+
+def revoke_feature(user_id: str, feature: str) -> None:
+    client = get_client()
+    (
+        client.table("feature_access")
+        .delete()
+        .eq("user_id", user_id)
+        .eq("feature", feature)
+        .execute()
+    )
+
+
+def find_user_by_email(email: str) -> dict | None:
+    """Look up an auth user by email (case-insensitive) via the admin API.
+
+    Returns {user_id, email} or None if nobody has signed up with that email."""
+    target = email.strip().lower()
+    for u in _iter_auth_users():
+        if (u.get("email") or "").strip().lower() == target:
+            return {"user_id": u["id"], "email": u.get("email")}
+    return None
+
+
+def _iter_auth_users():
+    """Yield every auth user as a plain dict, paging through the admin API."""
+    client = get_client()
+    page = 1
+    while True:
+        resp = client.auth.admin.list_users(page=page, per_page=200)
+        # The supabase client returns either a list or an object with .users
+        users = resp if isinstance(resp, list) else getattr(resp, "users", []) or []
+        if not users:
+            break
+        for u in users:
+            yield {
+                "id": str(getattr(u, "id", None) or u["id"]),
+                "email": getattr(u, "email", None) if not isinstance(u, dict) else u.get("email"),
+                "last_sign_in_at": (
+                    getattr(u, "last_sign_in_at", None)
+                    if not isinstance(u, dict)
+                    else u.get("last_sign_in_at")
+                ),
+            }
+        if len(users) < 200:
+            break
+        page += 1
+
+
+def list_all_users() -> list[dict]:
+    """List every auth user with their admin flag and granted features.
+
+    Used by the admin panel. Joins the Supabase auth user list with
+    user_profiles (is_admin) and feature_access (features)."""
+    client = get_client()
+    profiles = {
+        p["user_id"]: p
+        for p in (
+            client.table("user_profiles")
+            .select("user_id, is_admin")
+            .execute()
+            .data
+            or []
+        )
+    }
+    features_by_user: dict[str, list[str]] = defaultdict(list)
+    for row in (
+        client.table("feature_access").select("user_id, feature").execute().data or []
+    ):
+        features_by_user[row["user_id"]].append(row["feature"])
+
+    users = []
+    for u in _iter_auth_users():
+        uid = u["id"]
+        users.append(
+            {
+                "user_id": uid,
+                "email": u.get("email"),
+                "last_sign_in_at": u.get("last_sign_in_at"),
+                "is_admin": bool(profiles.get(uid, {}).get("is_admin")),
+                "features": sorted(features_by_user.get(uid, [])),
+            }
+        )
+    # Signed-in-most-recently first, unknown last.
+    users.sort(key=lambda x: (x["last_sign_in_at"] or ""), reverse=True)
+    return users
