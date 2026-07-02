@@ -713,19 +713,25 @@ PROFILE_COLUMNS = "user_id, email, display_name, avatar_url, platform_links"
 
 
 def get_profile(user_id: str) -> dict:
-    """The user's public-facing profile fields (plus cached email)."""
-    client = get_client()
-    result = (
-        client.table("user_profiles")
-        .select(PROFILE_COLUMNS)
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
-    if result.data:
-        row = result.data[0]
-        row["platform_links"] = row.get("platform_links") or {}
-        return row
+    """The user's public-facing profile fields (plus cached email).
+
+    Degrades to an empty profile if the columns don't exist yet (code deployed
+    before migration 006) so pages that embed profile data keep working."""
+    try:
+        client = get_client()
+        result = (
+            client.table("user_profiles")
+            .select(PROFILE_COLUMNS)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            row = result.data[0]
+            row["platform_links"] = row.get("platform_links") or {}
+            return row
+    except Exception as e:
+        print(f"[profile] read failed (run migration 006?): {e}")
     return {
         "user_id": user_id,
         "email": None,
