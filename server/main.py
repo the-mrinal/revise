@@ -6,11 +6,11 @@ from datetime import date
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from auth import (
     exchange_code_for_session,
@@ -21,6 +21,8 @@ from auth import (
 )
 from database import (
     count_revisions_done_today,
+    decrement_attempts,
+    delete_latest_attempt_event,
     delete_question,
     delete_user_platform,
     ensure_user_profile,
@@ -28,6 +30,7 @@ from database import (
     find_user_by_email,
     get_all_questions,
     get_flex_stats,
+    get_profile,
     get_recent_audit,
     get_question,
     get_question_events,
@@ -51,8 +54,10 @@ from database import (
     merge_duplicates_for_question,
     revoke_feature,
     set_user_admin,
+    update_profile,
     update_question,
     update_question_sm2,
+    upload_avatar,
     upsert_user_settings,
 )
 from patterns import (
@@ -142,15 +147,34 @@ def detect_platform(url: str, user_platforms: list[dict] | None = None) -> str:
 
 # --- Request models ---
 
+VALID_DIFFICULTIES = {"easy", "medium", "hard"}
+
+
+def normalize_difficulty(v: Optional[str]) -> Optional[str]:
+    """Difficulty is stored lowercase-only; imported data used to carry
+    capitalized values ('Easy') which split the stats into duplicate buckets."""
+    if v is None:
+        return None
+    v = v.strip().lower()
+    if not v:
+        return None
+    if v not in VALID_DIFFICULTIES:
+        raise ValueError("difficulty must be one of: easy, medium, hard")
+    return v
+
 
 class QuestionIn(BaseModel):
     url: str
     title: Optional[str] = None
     difficulty: Optional[str] = None
-    self_rating: int = Field(ge=1, le=5)
+    self_rating: Optional[int] = Field(default=None, ge=1, le=5)
     time_taken: Optional[int] = None
     notes: Optional[str] = None
     question_type: Optional[str] = "dsa"
+
+    _normalize_difficulty = field_validator("difficulty", mode="before")(
+        classmethod(lambda cls, v: normalize_difficulty(v))
+    )
 
 
 class QuestionUpdate(BaseModel):
@@ -166,6 +190,10 @@ class QuestionUpdate(BaseModel):
     mistakes: Optional[str] = None
     time_complexity: Optional[str] = None
     space_complexity: Optional[str] = None
+
+    _normalize_difficulty = field_validator("difficulty", mode="before")(
+        classmethod(lambda cls, v: normalize_difficulty(v))
+    )
 
 
 class ReviewIn(BaseModel):
@@ -188,6 +216,11 @@ class SettingsUpdate(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+
+class ProfileUpdate(BaseModel):
+    display_name: Optional[str] = None
+    platform_links: Optional[dict[str, str]] = None
 
 
 class FeatureToggle(BaseModel):
@@ -256,6 +289,64 @@ def me(claims: dict = Depends(get_current_claims)):
         "is_admin": is_user_admin(user_id),
         "features": get_user_features(user_id),
     }
+
+
+# --- Profile (display name, avatar, platform profile links) ---
+
+
+@app.get("/api/profile")
+def read_profile(claims: dict = Depends(get_current_claims)):
+    ensure_user_profile(claims["sub"], claims.get("email"))
+    return get_profile(claims["sub"])
+
+
+@app.put("/api/profile")
+def save_profile(p: ProfileUpdate, user_id: str = Depends(get_current_user_id)):
+    updates = {}
+    if p.display_name is not None:
+        updates["display_name"] = p.display_name.strip()[:80] or None
+    if p.platform_links is not None:
+        links = {}
+        for name, link in p.platform_links.items():
+            name = (name or "").strip().lower()
+            link = (link or "").strip()
+            if not name or not link:
+                continue  # empty link = remove it
+            if not link.startswith(("http://", "https://")):
+                link = "https://" + link
+            links[name] = link[:500]
+        updates["platform_links"] = links
+    if not updates:
+        raise HTTPException(400, "No fields to update")
+    return update_profile(user_id, updates)
+
+
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
+AVATAR_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+
+
+@app.post("/api/profile/avatar")
+async def save_avatar(file: UploadFile = File(...), user_id: str = Depends(get_current_user_id)):
+    ext = AVATAR_TYPES.get(file.content_type)
+    if not ext:
+        raise HTTPException(400, "Avatar must be a PNG, JPEG, WebP, or GIF image")
+    content = await file.read(MAX_AVATAR_BYTES + 1)
+    if not content:
+        raise HTTPException(400, "Empty file")
+    if len(content) > MAX_AVATAR_BYTES:
+        raise HTTPException(413, "Avatar must be 5 MB or smaller")
+    try:
+        url = upload_avatar(user_id, content, file.content_type, ext)
+    except Exception as e:
+        print(f"[avatar] upload failed for {user_id}: {e}")
+        raise HTTPException(502, "Avatar upload failed — is the 'avatars' bucket created (migration 006)?")
+    update_profile(user_id, {"avatar_url": url})
+    return {"avatar_url": url}
 
 
 # --- Admin panel (admin role required) ---
@@ -345,11 +436,15 @@ def create_question(q: QuestionIn, user_id: str = Depends(get_current_user_id)):
             user_id, existing["id"], "attempted",
             self_rating=q.self_rating, time_taken=q.time_taken,
         )
-        return updated
+        # was_existing lets the extension's Cancel roll back the right way:
+        # delete a fresh row, but only undo the attempt bump on an old one.
+        return {**updated, "was_existing": True}
 
     user_plats = get_user_platforms(user_id)
     platform = detect_platform(url, user_plats)
-    sm2_result = sm2(q.self_rating, 2.5, 1, 0)
+    # No rating yet on a timer-start capture: schedule with a neutral quality
+    # but store self_rating as NULL so stats only reflect real reviews.
+    sm2_result = sm2(q.self_rating or 3, 2.5, 1, 0)
 
     # Auto-detect DSA pattern for LeetCode problems
     pattern_label = get_pattern_for_url(url) if platform == "leetcode" else None
@@ -375,7 +470,7 @@ def create_question(q: QuestionIn, user_id: str = Depends(get_current_user_id)):
         interval=sm2_result["interval"], repetitions=sm2_result["repetitions"],
         easiness_factor=sm2_result["easiness_factor"], next_review=sm2_result["next_review"],
     )
-    return updated
+    return {**updated, "was_existing": False}
 
 
 @app.get("/api/questions")
@@ -494,6 +589,19 @@ def remove_platform(platform_id: int, user_id: str = Depends(get_current_user_id
     deleted = delete_user_platform(user_id, platform_id)
     if not deleted:
         raise HTTPException(404, "Platform not found")
+    return {"ok": True}
+
+
+@app.post("/api/questions/{qid}/cancel-attempt")
+def cancel_attempt(qid: int, user_id: str = Depends(get_current_user_id)):
+    """Undo a timer-start on an already-tracked question: roll back the
+    attempt counter and the 'attempted' event that POST /questions logged.
+    (For a question the start newly created, the extension DELETEs it instead.)"""
+    question = get_question(user_id, qid)
+    if not question:
+        raise HTTPException(404, "Question not found")
+    decrement_attempts(user_id, qid)
+    delete_latest_attempt_event(user_id, qid)
     return {"ok": True}
 
 

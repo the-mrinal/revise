@@ -16,8 +16,30 @@
 
   /* Title card */
   .title-card { text-align: center; padding: 48px 20px 36px; }
+  .avatar {
+    width: 84px; height: 84px; border-radius: 50%; margin: 0 auto 14px;
+    background: #1e1b4b center/cover no-repeat; border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    color: #a5b4fc; font-size: 34px; font-weight: 800;
+  }
+  .display-name { font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 6px; }
   .fun-title { font-size: 36px; font-weight: 800; background: linear-gradient(135deg, #a78bfa, #6ee7b7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; line-height: 1.2; }
   .fun-subtitle { color: var(--muted); font-size: 14px; margin-top: 8px; }
+
+  /* Recent solves */
+  .recent-section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 20px; }
+  .recent-section h3 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+  .recent-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #1a1a1a; }
+  .recent-item:last-child { border-bottom: none; }
+  .recent-item .r-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .recent-item .r-title a { color: var(--text); text-decoration: none; }
+  .recent-item .r-title a:hover { color: #a5b4fc; }
+  .recent-item .r-meta { display: flex; gap: 8px; align-items: center; flex-shrink: 0; font-size: 11px; color: var(--muted); }
+  .recent-item .r-diff { text-transform: capitalize; font-weight: 700; }
+  .recent-item .r-diff.easy { color: #34d399; }
+  .recent-item .r-diff.medium { color: #fbbf24; }
+  .recent-item .r-diff.hard { color: #f87171; }
+  .recent-item .r-stars { color: #f4c542; letter-spacing: 1px; }
 
   /* Stats row */
   .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
@@ -108,6 +130,8 @@
   <div id="content" class="hidden">
     <!-- Title -->
     <div class="title-card">
+      <div class="avatar hidden" id="avatar"></div>
+      <div class="display-name hidden" id="displayName"></div>
       <div class="fun-title" id="funTitle"></div>
       <div class="fun-subtitle" id="funSubtitle"></div>
     </div>
@@ -118,6 +142,12 @@
       <div class="stat-card"><div class="value" id="statTime">—</div><div class="label">Hours</div></div>
       <div class="stat-card"><div class="value" id="statRating">—</div><div class="label">Avg Rating</div></div>
       <div class="stat-card"><div class="value" id="statReviews">—</div><div class="label">Reviews</div></div>
+    </div>
+
+    <!-- Recent solves -->
+    <div class="recent-section hidden" id="recentSection">
+      <h3>Latest Solves</h3>
+      <div id="recentList"></div>
     </div>
 
     <!-- Difficulty bar -->
@@ -283,8 +313,43 @@ async function init() {
   }
 }
 
+function esc(s) { const el = document.createElement('div'); el.textContent = s == null ? '' : s; return el.innerHTML; }
+
 function render(d, isOwner) {
   document.getElementById('content').classList.remove('hidden');
+
+  // Profile: avatar + display name
+  if (d.avatar_url) {
+    const av = document.getElementById('avatar');
+    av.classList.remove('hidden');
+    av.style.backgroundImage = 'url("' + d.avatar_url + '")';
+  } else if (d.display_name) {
+    const av = document.getElementById('avatar');
+    av.classList.remove('hidden');
+    av.textContent = d.display_name.trim().charAt(0).toUpperCase();
+  }
+  if (d.display_name) {
+    const nameEl = document.getElementById('displayName');
+    nameEl.classList.remove('hidden');
+    nameEl.textContent = d.display_name;
+  }
+
+  // Latest solves with time and rating
+  const recent = d.recent_solves || [];
+  if (recent.length) {
+    document.getElementById('recentSection').classList.remove('hidden');
+    document.getElementById('recentList').innerHTML = recent.map(q => {
+      const stars = q.self_rating ? '★'.repeat(q.self_rating) + '☆'.repeat(5 - q.self_rating) : '';
+      return `<div class="recent-item">
+        <div class="r-title"><a href="${esc(q.url)}" target="_blank" rel="noopener">${esc(q.title)}</a></div>
+        <div class="r-meta">
+          ${q.difficulty ? `<span class="r-diff ${esc(q.difficulty)}">${esc(q.difficulty)}</span>` : ''}
+          ${q.time_taken ? `<span>${q.time_taken} min</span>` : ''}
+          ${stars ? `<span class="r-stars">${stars}</span>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
 
   // Title
   document.getElementById('funTitle').textContent = d.title;
@@ -317,15 +382,23 @@ function render(d, isOwner) {
     document.getElementById('diffSection').classList.add('hidden');
   }
 
-  // Platforms
+  // Platforms — pills link out to the user's public profile when they added one
   const platforms = d.by_platform || {};
+  const links = d.platform_links || {};
   const pillsEl = document.getElementById('pills');
   const sorted = Object.entries(platforms).sort((a, b) => b[1] - a[1]);
   if (sorted.length > 0) {
     sorted.forEach(([name, count]) => {
-      const pill = document.createElement('div');
+      const link = links[String(name).toLowerCase()];
+      const pill = document.createElement(link ? 'a' : 'div');
       pill.className = 'pill';
-      pill.innerHTML = name + '<span class="count">' + count + '</span>';
+      pill.innerHTML = esc(name) + '<span class="count">' + count + '</span>' + (link ? ' ↗' : '');
+      if (link) {
+        pill.href = link;
+        pill.target = '_blank';
+        pill.rel = 'noopener';
+        pill.style.textDecoration = 'none';
+      }
       pillsEl.appendChild(pill);
     });
   } else {

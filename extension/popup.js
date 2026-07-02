@@ -112,12 +112,14 @@ async function initAuth() {
   try {
     const r = await apiFetch("/stats");
     if (r.ok) {
+      let dueTotal = null;
+      try { dueTotal = (await r.json()).due_today; } catch {}
       document.getElementById("signOutLink").style.display = "inline";
       document.getElementById("resyncBtn").style.display = "none";
       document.getElementById("statusDot").classList.add("connected");
       document.getElementById("statusText").textContent = "Server connected";
       checkActiveTimer();
-      loadRevisions();
+      loadRevisions(dueTotal);
       return;
     }
   } catch {}
@@ -334,7 +336,6 @@ document.getElementById("startTimerBtn").addEventListener("click", async () => {
   const payload = {
     url,
     title,
-    self_rating: 3,
     difficulty: null,
     time_taken: null,
     notes: null,
@@ -353,6 +354,9 @@ document.getElementById("startTimerBtn").addEventListener("click", async () => {
 
       const timerState = {
         questionId: question.id,
+        // Cancel needs to know whether to delete the row (fresh) or just
+        // roll back the attempt bump (already tracked).
+        wasExisting: !!question.was_existing,
         url: url,
         title: title || url,
         questionType: questionType,
@@ -568,17 +572,28 @@ function showToast(msg, type) {
 }
 
 // --- Load revisions due today ---
-async function loadRevisions() {
+// dueTotal: the uncapped due count from /stats. /revisions/today is capped by
+// the daily queue setting, so the two can legitimately differ — surface that
+// instead of looking broken next to the dashboard's number.
+async function loadRevisions(dueTotal) {
+  const list = document.getElementById("revisionList");
+  const badge = document.getElementById("revCount");
   try {
     const r = await apiFetch("/revisions/today");
-    if (!r.ok) return;
+    if (!r.ok) {
+      badge.textContent = "!";
+      list.innerHTML = '<div class="empty-state">Couldn\'t load revisions (error ' + r.status + ')</div>';
+      return;
+    }
     const items = await r.json();
-    document.getElementById("revCount").textContent = items.length;
+    badge.textContent = items.length;
 
-    const list = document.getElementById("revisionList");
+    const capNote = (typeof dueTotal === "number" && dueTotal > items.length)
+      ? `<div class="queue-cap-note">${dueTotal} due in total · daily queue limit applies</div>`
+      : "";
+
     if (items.length === 0) {
-      list.innerHTML =
-        '<div class="empty-state">No revisions due today!</div>';
+      list.innerHTML = '<div class="empty-state">No revisions due today!</div>' + capNote;
       return;
     }
 
@@ -593,16 +608,49 @@ async function loadRevisions() {
         </div>
       </div>`
       )
-      .join("");
+      .join("") + capNote;
   } catch {
-    document.getElementById("revisionList").innerHTML =
-      '<div class="empty-state">Server offline</div>';
+    badge.textContent = "!";
+    list.innerHTML = '<div class="empty-state">Server offline</div>';
   }
+}
+
+// --- Cancel a started attempt without submitting anything ---
+async function cancelAttempt() {
+  const data = await new Promise((res) => chrome.storage.local.get("timer", res));
+  const timer = data.timer;
+  if (!timer || !timer.questionId) return;
+  if (!confirm("Discard this attempt? Nothing will be recorded.")) return;
+
+  try {
+    if (timer.wasExisting === false) {
+      // Question was created by this timer start: remove it entirely.
+      await apiFetch(`/questions/${timer.questionId}`, { method: "DELETE" });
+    } else {
+      // Question existed before this timer (or the timer predates the
+      // wasExisting flag — never delete on a guess): undo the attempt bump.
+      await apiFetch(`/questions/${timer.questionId}/cancel-attempt`, { method: "POST" });
+    }
+    showToast("Attempt discarded", "success");
+  } catch {
+    showToast("Timer cleared (server unreachable)", "error");
+  }
+
+  chrome.storage.local.remove("timer");
+  finishTimerData = null;
+  if (timerInterval) clearInterval(timerInterval);
+  showView(startView);
+  loadRevisions();
 }
 
 // --- Button event listeners ---
 document.getElementById("pauseBtn").addEventListener("click", togglePause);
 document.getElementById("stopBtn").addEventListener("click", showFinishForm);
+document.getElementById("cancelBtn").addEventListener("click", cancelAttempt);
+document.getElementById("discardLink").addEventListener("click", (e) => {
+  e.preventDefault();
+  cancelAttempt();
+});
 
 // --- Open overlay on active tab ---
 document.getElementById("openOverlayLink").addEventListener("click", (e) => {

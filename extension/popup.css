@@ -243,6 +243,34 @@ body {
   color: #fca5a5;
 }
 
+.timer-btn.cancel {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #888;
+}
+
+/* Discard link under the finish form */
+.discard-link {
+  display: block;
+  text-align: center;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #777;
+  text-decoration: none;
+}
+
+.discard-link:hover {
+  color: #fca5a5;
+}
+
+/* Note under the due list when the daily queue cap hides some due items */
+.queue-cap-note {
+  font-size: 10px;
+  color: #666;
+  text-align: center;
+  padding: 6px 0 2px;
+}
+
 /* Finish form header */
 .finish-header {
   background: #1a1a2e;

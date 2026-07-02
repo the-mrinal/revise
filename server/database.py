@@ -322,6 +322,37 @@ def increment_attempts(user_id: str, qid: int, title: str | None = None) -> dict
     return update_question(user_id, qid, update_data)
 
 
+def decrement_attempts(user_id: str, qid: int) -> dict | None:
+    """Roll back one attempt bump (never below 1). Used when a timer-start on
+    an existing question is cancelled."""
+    question = get_question(user_id, qid)
+    if not question:
+        return None
+    attempts = max(1, (question.get("attempts") or 1) - 1)
+    return update_question(user_id, qid, {"attempts": attempts})
+
+
+def delete_latest_attempt_event(user_id: str, qid: int) -> None:
+    """Drop the newest 'attempted' event for a question. Best-effort: the
+    counter rollback matters more than the log entry."""
+    try:
+        client = get_client()
+        rows = (
+            client.table("question_events")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("question_id", qid)
+            .eq("event_type", "attempted")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        ).data
+        if rows:
+            client.table("question_events").delete().eq("id", rows[0]["id"]).execute()
+    except Exception as e:
+        print(f"[events] failed to delete attempted event for q{qid}: {e}")
+
+
 def _normalize_url(url: str) -> str:
     """Normalize URL for dedup: strip query params, fragments, sub-paths."""
     parsed = urlparse(url)
@@ -450,6 +481,12 @@ def delete_user_platform(user_id: str, platform_id: int) -> bool:
     return len(result.data) > 0
 
 
+def _norm_difficulty(value: str | None) -> str:
+    """Bucket key for stats: lowercase so legacy capitalized rows ('Easy')
+    can't split into a duplicate bucket alongside 'easy'."""
+    return (value or "").strip().lower() or "unknown"
+
+
 def get_stats(user_id: str) -> dict:
     all_rows = get_all_questions(user_id)
     total = len(all_rows)
@@ -461,7 +498,7 @@ def get_stats(user_id: str) -> dict:
     today = date.today().isoformat()
 
     for r in all_rows:
-        diff = r.get("difficulty") or "unknown"
+        diff = _norm_difficulty(r.get("difficulty"))
         by_difficulty[diff] = by_difficulty.get(diff, 0) + 1
 
         plat = r.get("platform") or "unknown"
@@ -501,7 +538,7 @@ def get_flex_stats(user_id: str) -> dict | None:
     activity_dates: set[str] = set()
 
     for r in all_rows:
-        diff = r.get("difficulty") or "unknown"
+        diff = _norm_difficulty(r.get("difficulty"))
         by_difficulty[diff] = by_difficulty.get(diff, 0) + 1
 
         plat = r.get("platform") or "unknown"
@@ -600,7 +637,28 @@ def get_flex_stats(user_id: str) -> dict | None:
     else:
         title = "Fresh Recruit"
 
+    # Public profile bits: name, avatar, platform profile links.
+    profile = get_profile(user_id)
+
+    # Last two solves with time and rating (rows are already solved_at desc).
+    recent_solves = [
+        {
+            "title": r.get("title") or r.get("url"),
+            "url": r.get("url"),
+            "platform": r.get("platform"),
+            "difficulty": (r.get("difficulty") or "").strip().lower() or None,
+            "self_rating": r.get("self_rating"),
+            "time_taken": r.get("time_taken"),
+            "solved_at": r.get("solved_at"),
+        }
+        for r in all_rows[:2]
+    ]
+
     return {
+        "display_name": profile.get("display_name"),
+        "avatar_url": profile.get("avatar_url"),
+        "platform_links": profile.get("platform_links") or {},
+        "recent_solves": recent_solves,
         "total_solved": total,
         "by_difficulty": by_difficulty,
         "by_platform": by_platform,
@@ -649,6 +707,60 @@ def ensure_user_profile(user_id: str, email: str | None = None) -> dict:
         row, on_conflict="user_id", ignore_duplicates=True
     ).execute()
     return row
+
+
+PROFILE_COLUMNS = "user_id, email, display_name, avatar_url, platform_links"
+
+
+def get_profile(user_id: str) -> dict:
+    """The user's public-facing profile fields (plus cached email).
+
+    Degrades to an empty profile if the columns don't exist yet (code deployed
+    before migration 006) so pages that embed profile data keep working."""
+    try:
+        client = get_client()
+        result = (
+            client.table("user_profiles")
+            .select(PROFILE_COLUMNS)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            row = result.data[0]
+            row["platform_links"] = row.get("platform_links") or {}
+            return row
+    except Exception as e:
+        print(f"[profile] read failed (run migration 006?): {e}")
+    return {
+        "user_id": user_id,
+        "email": None,
+        "display_name": None,
+        "avatar_url": None,
+        "platform_links": {},
+    }
+
+
+def update_profile(user_id: str, fields: dict) -> dict:
+    client = get_client()
+    client.table("user_profiles").upsert(
+        {"user_id": user_id, **fields}, on_conflict="user_id"
+    ).execute()
+    return get_profile(user_id)
+
+
+def upload_avatar(user_id: str, content: bytes, content_type: str, ext: str) -> str:
+    """Store the avatar in the public 'avatars' bucket and return its URL.
+
+    The path is stable per user (overwritten on re-upload); a version query
+    param busts browser caches."""
+    client = get_client()
+    path = f"{user_id}/avatar.{ext}"
+    client.storage.from_("avatars").upload(
+        path, content, {"content-type": content_type, "upsert": "true"}
+    )
+    url = client.storage.from_("avatars").get_public_url(path).rstrip("?")
+    return f"{url}?v={int(datetime.utcnow().timestamp())}"
 
 
 def is_user_admin(user_id: str) -> bool:
@@ -849,7 +961,7 @@ def get_user_activity(user_id: str) -> dict:
     last_active = None
 
     for r in rows:
-        diff = r.get("difficulty") or "unknown"
+        diff = _norm_difficulty(r.get("difficulty"))
         by_difficulty[diff] = by_difficulty.get(diff, 0) + 1
         plat = r.get("platform") or "unknown"
         by_platform[plat] = by_platform.get(plat, 0) + 1
