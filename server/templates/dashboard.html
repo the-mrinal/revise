@@ -18,7 +18,7 @@
 
   .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-bottom: 28px; }
   .stat-card {
-    position: relative; overflow: hidden;
+    position: relative; overflow: hidden; cursor: pointer;
     background: linear-gradient(150deg, #16161c 0%, #101015 100%);
     border: 1px solid var(--border); border-radius: 16px; padding: 22px 20px;
     transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
@@ -93,9 +93,11 @@
   .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 28px; }
   .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
   .chart-card h3 { font-size: 13px; margin-bottom: 12px; color: var(--muted); }
-  .bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 100px; }
-  .bar { display: flex; flex-direction: column; align-items: center; flex: 1; }
-  .bar-fill { width: 100%; border-radius: 4px 4px 0 0; min-height: 2px; transition: height 0.3s; }
+  .bar-chart { display: flex; align-items: flex-end; gap: 8px; }
+  .bar { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; flex: 1; cursor: pointer; }
+  .bar:hover .bar-fill { filter: brightness(1.25); }
+  .bar-value { font-size: 11px; color: #fff; font-weight: 700; margin-bottom: 4px; }
+  .bar-fill { width: 100%; border-radius: 4px 4px 0 0; min-height: 4px; transition: height 0.3s; }
   .bar-label { font-size: 10px; color: var(--muted); margin-top: 4px; text-transform: capitalize; }
 
   .empty { color: var(--muted); text-align: center; padding: 32px; font-size: 14px; }
@@ -243,6 +245,27 @@
   .flex-content .flex-empty .roast { font-size: 22px; font-weight: 800; color: #fff; line-height: 1.3; margin-bottom: 8px; }
   .flex-content .flex-empty .roast-sub { color: var(--muted); font-size: 13px; }
 
+  /* Profile modal + nudge */
+  .avatar-row { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .avatar-preview {
+    width: 64px; height: 64px; border-radius: 50%; flex-shrink: 0;
+    background: #1e1b4b; color: #a5b4fc; font-size: 24px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    background-size: cover; background-position: center; border: 1px solid var(--border);
+  }
+  .avatar-hint { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .plink-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .plink-row .plink-name { width: 110px; font-size: 12px; color: var(--muted); text-transform: capitalize; flex-shrink: 0; }
+  .plink-row input { flex: 1; padding: 7px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 12px; outline: none; }
+  .plink-row input:focus { border-color: var(--accent); }
+  .nudge {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+    background: #14142a; border: 1px solid #2a2a4a; border-radius: 10px;
+    padding: 10px 16px; margin-bottom: 16px; font-size: 12.5px;
+  }
+  .nudge a { cursor: pointer; }
+  .nudge .nudge-dismiss { color: var(--muted); }
+
   .login-overlay { display: none; position: fixed; inset: 0; background: var(--bg); z-index: 200; align-items: center; justify-content: center; }
   .login-overlay.open { display: flex; }
   .login-box { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; width: 380px; max-width: 90vw; text-align: center; }
@@ -274,6 +297,7 @@
     <a id="researchLink" href="/research" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;text-decoration:none;">Research</a>
     <a href="/prep" style="background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;text-decoration:none;display:inline-block;">Interview Prep</a>
     <button id="flexBtn" onclick="openFlex()" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;">Flex</button>
+    <button id="profileBtn" onclick="openProfile()" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;">Profile</button>
     <button class="settings-btn" id="settingsBtn" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;">Settings</button>
     <span class="user-email" id="userEmail" style="display:none"></span>
     <button class="sign-out-btn" id="signOutBtn" style="display:none">Sign Out</button>
@@ -291,6 +315,7 @@
 </div>
 
 <div class="tab-content active" id="tab-overview">
+  <div id="profileNudge"></div>
   <div class="stats-grid" id="statsGrid"></div>
   <div class="chart-row" id="chartRow"></div>
 </div>
@@ -366,6 +391,7 @@
         <option value="easy">Easy</option>
         <option value="medium">Medium</option>
         <option value="hard">Hard</option>
+        <option value="unknown">Unknown</option>
       </select>
       <input type="text" id="searchBox" placeholder="Search...">
       <button onclick="exportCSV()">Export CSV</button>
@@ -484,6 +510,35 @@
     </div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeSettings()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="profileModal">
+  <div class="modal" style="width:520px;">
+    <h2>Profile</h2>
+    <div class="avatar-row">
+      <div class="avatar-preview" id="avatarPreview">?</div>
+      <div>
+        <input type="file" id="avatarInput" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none">
+        <button class="btn-cancel" style="padding:8px 16px;border-radius:6px;font-size:13px;cursor:pointer;border:none;" onclick="document.getElementById('avatarInput').click()">Upload Photo</button>
+        <div class="avatar-hint">PNG, JPEG, WebP or GIF · max 5 MB</div>
+        <div class="avatar-hint" id="avatarStatus"></div>
+      </div>
+    </div>
+    <div class="field">
+      <label>Display Name</label>
+      <input type="text" id="profileName" maxlength="80" placeholder="Shown on your flex page">
+    </div>
+    <div class="field">
+      <label>Platform Profiles</label>
+      <div id="platformLinksList" style="max-height:220px;overflow-y:auto;"></div>
+      <p style="font-size:11px;color:var(--muted);margin-top:6px;">Your public profile links on the platforms you practice on — shown on your flex page. Clear a field to remove the link.</p>
+    </div>
+    <div class="modal-actions">
+      <span id="profileStatus" style="font-size:12px;color:var(--muted);margin-right:auto;align-self:center;"></span>
+      <button class="btn-cancel" onclick="closeProfile()">Close</button>
+      <button class="btn-save" onclick="saveProfile()">Save</button>
     </div>
   </div>
 </div>
@@ -708,6 +763,7 @@ async function load() {
   populateFilters();
   populatePatternDropdown();
   renderTable();
+  loadProfile();  // not awaited: the nudge renders when it arrives
 }
 
 // Per-question revision info, with a sensible fallback when no event log exists
@@ -726,9 +782,20 @@ function revInfo(q) {
   };
 }
 
+// Jump to the All Items tab with filters/sort pre-applied. Used by the
+// overview stat cards and chart bars so every count is clickable.
+function goToAllItems(filter = {}) {
+  document.getElementById('filterPlatform').value = filter.platform || '';
+  document.getElementById('filterDifficulty').value = filter.difficulty || '';
+  document.getElementById('searchBox').value = '';
+  if (filter.sort) { sortKey = filter.sort; sortDir = filter.dir || 1; }
+  renderTable();
+  switchTab('all');
+}
+
 function renderStats(s) {
-  const card = (cls, icon, value, label, sub) => `
-    <div class="stat-card ${cls}">
+  const card = (cls, icon, value, label, sub, onclick) => `
+    <div class="stat-card ${cls}" onclick="${onclick}" title="Click to view">
       <div class="stat-top">
         <span class="label">${label}</span>
         <span class="stat-icon">${icon}</span>
@@ -740,25 +807,41 @@ function renderStats(s) {
     ? `${s.avg_rating}<span class="unit">/5</span>`
     : '—';
   document.getElementById("statsGrid").innerHTML =
-    card('stat-blue',   '📚', s.total, 'Total Tracked', 'problems in your library') +
-    card('stat-amber',  '🔥', s.due_today, 'Due Today', s.due_today ? 'ready to revise' : 'all caught up') +
-    card('stat-green',  '⭐', avg, 'Avg Rating', 'recall confidence') +
-    card('stat-violet', '🧩', Object.keys(s.by_platform || {}).length, 'Platforms', 'sources tracked');
+    card('stat-blue',   '📚', s.total, 'Total Tracked', 'problems in your library', "goToAllItems()") +
+    card('stat-amber',  '🔥', s.due_today, 'Due Today', s.due_today ? 'ready to revise' : 'all caught up', "switchTab('today')") +
+    card('stat-green',  '⭐', avg, 'Avg Rating', 'recall confidence', "goToAllItems({sort:'self_rating',dir:1})") +
+    card('stat-violet', '🧩', Object.keys(s.by_platform || {}).length, 'Platforms', 'sources tracked', "goToAllItems()");
 }
 
+const DIFF_ORDER = ["easy", "medium", "hard", "unknown"];
+const BAR_MAX_PX = 90;
+
 function renderCharts(s) {
-  const colors = { easy: "#6ee7b7", medium: "#fbbf24", hard: "#fca5a5" };
+  const colors = { easy: "#6ee7b7", medium: "#fbbf24", hard: "#fca5a5", unknown: "#6b7280" };
   const platformColors = ["#a5b4fc","#7c9cff","#c4b5fd","#93c5fd","#86efac","#fcd34d","#fca5a5","#f9a8d4"];
 
+  const barHeight = (v, max) => Math.max(4, Math.round((v / max) * BAR_MAX_PX));
+  const bar = (k, v, max, color, onclick) => `
+    <div class="bar" onclick="${onclick}" title="View ${esc(k)} items">
+      <div class="bar-value">${v}</div>
+      <div class="bar-fill" style="height:${barHeight(v, max)}px;background:${color}"></div>
+      <div class="bar-label">${esc(k)}</div>
+    </div>`;
+
   let diffBars = "", platBars = "";
-  const maxDiff = Math.max(...Object.values(s.by_difficulty || {}), 1);
-  for (const [k, v] of Object.entries(s.by_difficulty || {})) {
-    diffBars += `<div class="bar"><div class="bar-fill" style="height:${(v/maxDiff)*100}%;background:${colors[k]||'#888'}"></div><div class="bar-label">${k} (${v})</div></div>`;
+  const diffEntries = Object.entries(s.by_difficulty || {}).sort((a, b) => {
+    const ia = DIFF_ORDER.indexOf(a[0]), ib = DIFF_ORDER.indexOf(b[0]);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+  const maxDiff = Math.max(...diffEntries.map(([, v]) => v), 1);
+  for (const [k, v] of diffEntries) {
+    diffBars += bar(k, v, maxDiff, colors[k] || '#888', `goToAllItems({difficulty:'${esc(k)}'})`);
   }
-  const maxPlat = Math.max(...Object.values(s.by_platform || {}), 1);
+  const platEntries = Object.entries(s.by_platform || {}).sort((a, b) => b[1] - a[1]);
+  const maxPlat = Math.max(...platEntries.map(([, v]) => v), 1);
   let i = 0;
-  for (const [k, v] of Object.entries(s.by_platform || {})) {
-    platBars += `<div class="bar"><div class="bar-fill" style="height:${(v/maxPlat)*100}%;background:${platformColors[i++%platformColors.length]}"></div><div class="bar-label">${k} (${v})</div></div>`;
+  for (const [k, v] of platEntries) {
+    platBars += bar(k, v, maxPlat, platformColors[i++ % platformColors.length], `goToAllItems({platform:'${esc(k)}'})`);
   }
 
   document.getElementById("chartRow").innerHTML = `
@@ -952,6 +1035,10 @@ function populateFilters() {
   const platforms = [...new Set(allQuestions.map(q => q.platform).filter(Boolean))];
   const sel = document.getElementById("filterPlatform");
   sel.innerHTML = '<option value="">All Platforms</option>' + platforms.map(p => `<option value="${p}">${p}</option>`).join('');
+  // "unknown" bucket from the overview chart = rows with no platform set.
+  if (allQuestions.some(q => !q.platform)) {
+    sel.innerHTML += '<option value="unknown">Unknown</option>';
+  }
 }
 
 function renderTable() {
@@ -960,8 +1047,8 @@ function renderTable() {
   const search = document.getElementById("searchBox").value.toLowerCase();
 
   let filtered = allQuestions.filter(q => {
-    if (pf && q.platform !== pf) return false;
-    if (df && q.difficulty !== df) return false;
+    if (pf && (pf === 'unknown' ? !!q.platform : q.platform !== pf)) return false;
+    if (df && (df === 'unknown' ? !!q.difficulty : q.difficulty !== df)) return false;
     if (search && !(q.title||'').toLowerCase().includes(search) && !q.url.toLowerCase().includes(search)) return false;
     return true;
   });
@@ -1129,6 +1216,139 @@ document.getElementById('settingsModal').addEventListener('click', (e) => {
   if (e.target === document.getElementById('settingsModal')) closeSettings();
 });
 
+// --- Profile ---
+let myProfile = null;
+
+function usedPlatforms() {
+  return [...new Set(allQuestions.map(q => q.platform).filter(Boolean))];
+}
+
+async function loadProfile() {
+  try {
+    const r = await apiFetch('/profile');
+    myProfile = r.ok ? await r.json() : null;
+  } catch { myProfile = null; }
+  renderProfileNudge();
+}
+
+// Nudge: platforms you practice on but haven't linked a public profile for.
+function renderProfileNudge() {
+  const el = document.getElementById('profileNudge');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!myProfile || localStorage.getItem('profile-nudge-dismissed')) return;
+  const links = myProfile.platform_links || {};
+  const missing = usedPlatforms().filter(p => !links[p.toLowerCase()]);
+  if (!missing.length) return;
+  const names = missing.slice(0, 3).join(', ') + (missing.length > 3 ? ` +${missing.length - 3} more` : '');
+  el.innerHTML = `<div class="nudge">
+    <span>👤 You practice on <b>${esc(names)}</b> — add your profile links to show them off on your flex page.</span>
+    <span><a onclick="openProfile()">Add links</a> &nbsp;·&nbsp; <a class="nudge-dismiss" onclick="dismissProfileNudge()">Dismiss</a></span>
+  </div>`;
+}
+
+function dismissProfileNudge() {
+  localStorage.setItem('profile-nudge-dismissed', '1');
+  renderProfileNudge();
+}
+
+function renderAvatarPreview(url, fallbackName) {
+  const el = document.getElementById('avatarPreview');
+  if (url) {
+    el.style.backgroundImage = `url("${url}")`;
+    el.textContent = '';
+  } else {
+    el.style.backgroundImage = '';
+    el.textContent = (fallbackName || '?').trim().charAt(0).toUpperCase() || '?';
+  }
+}
+
+async function openProfile() {
+  document.getElementById('profileModal').classList.add('open');
+  document.getElementById('profileStatus').textContent = '';
+  document.getElementById('avatarStatus').textContent = '';
+  if (!myProfile) await loadProfile();
+  const p = myProfile || {};
+  document.getElementById('profileName').value = p.display_name || '';
+  renderAvatarPreview(p.avatar_url, p.display_name || p.email);
+  const links = p.platform_links || {};
+  const names = [...new Set([...usedPlatforms().map(n => n.toLowerCase()), ...Object.keys(links)])].sort();
+  const listEl = document.getElementById('platformLinksList');
+  listEl.innerHTML = names.length
+    ? names.map(n => `<div class="plink-row">
+        <span class="plink-name">${esc(n)}</span>
+        <input data-platform="${esc(n)}" placeholder="https://${esc(n)}.com/u/your-handle" value="${esc(links[n] || '')}">
+      </div>`).join('')
+    : '<p style="font-size:12px;color:var(--muted);">Track a problem first — the platforms you use will appear here.</p>';
+}
+
+function closeProfile() {
+  document.getElementById('profileModal').classList.remove('open');
+}
+
+document.getElementById('profileModal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('profileModal')) closeProfile();
+});
+
+async function saveProfile() {
+  const status = document.getElementById('profileStatus');
+  const platform_links = {};
+  document.querySelectorAll('#platformLinksList input[data-platform]').forEach(inp => {
+    platform_links[inp.dataset.platform] = inp.value.trim();
+  });
+  status.textContent = 'Saving...';
+  try {
+    const r = await apiFetch('/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        display_name: document.getElementById('profileName').value,
+        platform_links,
+      }),
+    });
+    if (!r.ok) throw new Error();
+    myProfile = await r.json();
+    status.textContent = 'Saved';
+    status.style.color = '#6ee7b7';
+    renderProfileNudge();
+  } catch {
+    status.textContent = 'Failed to save';
+    status.style.color = '#fca5a5';
+  }
+}
+
+document.getElementById('avatarInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const status = document.getElementById('avatarStatus');
+  if (file.size > 5 * 1024 * 1024) {
+    status.textContent = 'That file is over 5 MB.';
+    status.style.color = '#fca5a5';
+    return;
+  }
+  status.textContent = 'Uploading...';
+  status.style.color = 'var(--muted)';
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const r = await apiFetch('/profile/avatar', { method: 'POST', body: form });
+    if (!r.ok) {
+      let msg = 'Upload failed';
+      try { msg = (await r.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    const d = await r.json();
+    if (myProfile) myProfile.avatar_url = d.avatar_url;
+    renderAvatarPreview(d.avatar_url);
+    status.textContent = 'Uploaded';
+    status.style.color = '#6ee7b7';
+  } catch (err) {
+    status.textContent = err.message || 'Upload failed';
+    status.style.color = '#fca5a5';
+  }
+});
+
 // --- Flex modal ---
 const ROASTS = [
   "Error 404: Effort Not Found",
@@ -1185,11 +1405,23 @@ function renderFlex(el, d, userId) {
   if (d.patterns_mastered > 0) subtitleParts.push(d.patterns_mastered + ' categor' + (d.patterns_mastered > 1 ? 'ies' : 'y') + ' mastered');
   if (d.total_solved > 0) subtitleParts.push(d.total_solved + ' problems solved');
 
+  const recent = (d.recent_solves || []).map(q => {
+    const stars = q.self_rating ? '\u2605'.repeat(q.self_rating) + '\u2606'.repeat(5 - q.self_rating) : '';
+    const bits = [q.difficulty, q.time_taken ? `${q.time_taken} min` : '', stars].filter(Boolean).join(' \u00B7 ');
+    return `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid #1a1a1a;font-size:12px;">
+      <a href="${esc(q.url)}" target="_blank" style="color:var(--text);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(q.title)}</a>
+      <span style="color:var(--muted);white-space:nowrap;text-transform:capitalize;">${bits}</span>
+    </div>`;
+  }).join('');
+
   el.innerHTML = `
     <div class="flex-title-card">
+      ${d.avatar_url ? `<div style="width:72px;height:72px;border-radius:50%;margin:0 auto 12px;background:url('${d.avatar_url}') center/cover;border:2px solid var(--border);"></div>` : ''}
+      ${d.display_name ? `<div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:4px;">${esc(d.display_name)}</div>` : ''}
       <div class="fun-title">${esc(d.title)}</div>
       <div class="fun-subtitle">${subtitleParts.join(' \u00B7 ')}</div>
     </div>
+    ${recent ? `<div class="flex-section"><h4>Latest Solves</h4>${recent}</div>` : ''}
     <div class="flex-stats">
       <div class="flex-stat"><div class="val">${d.total_solved}</div><div class="lbl">Solved</div></div>
       <div class="flex-stat"><div class="val">${d.total_time_hours}</div><div class="lbl">Hours</div></div>
@@ -1299,10 +1531,11 @@ async function mergeDuplicates() {
 
 document.getElementById('settingsBtn').addEventListener('click', openSettings);
 
-// Show settings + flex buttons when logged in
+// Show settings + flex + profile buttons when logged in
 function showSettingsBtn() {
   document.getElementById('settingsBtn').style.display = 'inline-block';
   document.getElementById('flexBtn').style.display = 'inline-block';
+  document.getElementById('profileBtn').style.display = 'inline-block';
 }
 
 // --- Patterns ---
