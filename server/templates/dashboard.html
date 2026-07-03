@@ -186,6 +186,17 @@
 
   .empty { color: var(--muted); text-align: center; padding: 32px; font-size: 14px; }
 
+  /* Activity heatmap (LeetCode/GitHub-style day grid) */
+  .heatmap-card { margin-bottom: 28px; }
+  .heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 11px); grid-auto-columns: 11px; gap: 3px; overflow-x: auto; padding-bottom: 4px; }
+  .hm-cell { border-radius: 2px; background: #161b22; }
+  .hm-cell.l1 { background: #0e4429; }
+  .hm-cell.l2 { background: #006d32; }
+  .hm-cell.l3 { background: #26a641; }
+  .hm-cell.l4 { background: #39d353; }
+  .hm-legend { display: flex; align-items: center; gap: 4px; justify-content: flex-end; margin-top: 8px; font-size: 10px; color: var(--muted); }
+  .hm-legend .hm-cell { width: 11px; height: 11px; display: inline-block; }
+
   .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
   .modal-overlay.open { display: flex; }
   .modal { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 440px; max-width: 90vw; }
@@ -422,6 +433,13 @@
 <div class="tab-content active" id="tab-overview">
   <div id="profileNudge"></div>
   <div class="stats-grid" id="statsGrid"></div>
+  <div class="chart-card heatmap-card">
+    <h3>Activity</h3>
+    <div class="heatmap" id="heatmap"></div>
+    <div class="hm-legend">Less
+      <span class="hm-cell"></span><span class="hm-cell l1"></span><span class="hm-cell l2"></span><span class="hm-cell l3"></span><span class="hm-cell l4"></span>
+    More</div>
+  </div>
   <div class="chart-row" id="chartRow"></div>
 </div>
 
@@ -889,7 +907,7 @@ async function initAuth() {
 }
 
 async function load() {
-  const [questions, stats, revisions, activity, patterns, pLabels, recommendations, summary, settings] = await Promise.all([
+  const [questions, stats, revisions, activity, patterns, pLabels, recommendations, summary, settings, heatmap] = await Promise.all([
     apiFetch("/questions").then(r => r.json()),
     apiFetch("/stats").then(r => r.json()),
     apiFetch("/revisions/today").then(r => r.json()),
@@ -899,6 +917,7 @@ async function load() {
     apiFetch("/patterns/recommend").then(r => r.json()),
     apiFetch("/activity-summary").then(r => r.json()).catch(() => ({})),
     apiFetch("/settings").then(r => r.json()).catch(() => ({})),
+    apiFetch("/activity/heatmap").then(r => r.json()).catch(() => ({})),
   ]);
   allQuestions = questions;
   todayActivity = activity;
@@ -907,6 +926,7 @@ async function load() {
   activitySummary = summary || {};
   queueSize = (settings && settings.revision_queue_size != null) ? settings.revision_queue_size : null;
   renderStats(stats);
+  renderHeatmap(heatmap);
   renderCharts(stats);
   renderPatterns(patterns, recommendations);
   renderActivity();
@@ -970,6 +990,27 @@ function renderStats(s) {
 
 const DIFF_ORDER = ["easy", "medium", "hard", "unknown"];
 const BAR_MAX_PX = 90;
+
+// LeetCode-style day grid: one column per week, Sunday at the top, ~53 weeks
+// ending today. Counts come keyed by UTC day (same convention as streaks).
+function renderHeatmap(counts) {
+  const el = document.getElementById('heatmap');
+  if (!el) return;
+  counts = counts || {};
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const start = new Date(today);
+  start.setDate(start.getDate() - (52 * 7 + today.getDay()));  // back to a Sunday
+  const fmtISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const cells = [];
+  for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+    const n = counts[fmtISO(d)] || 0;
+    const lvl = n === 0 ? 0 : n <= 2 ? 1 : n <= 4 ? 2 : n <= 7 ? 3 : 4;
+    const label = `${n} ${n === 1 ? 'activity' : 'activities'} on ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    cells.push(`<div class="hm-cell${lvl ? ' l' + lvl : ''}" title="${label}"></div>`);
+  }
+  el.innerHTML = cells.join('');
+  el.scrollLeft = el.scrollWidth;  // recent weeks visible on narrow screens
+}
 
 function renderCharts(s) {
   const colors = { easy: "#6ee7b7", medium: "#fbbf24", hard: "#fca5a5", unknown: "#6b7280" };

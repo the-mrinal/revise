@@ -28,6 +28,7 @@ from database import (
     ensure_user_profile,
     find_by_url,
     find_user_by_email,
+    get_activity_heatmap,
     get_all_questions,
     get_flex_stats,
     get_profile,
@@ -564,6 +565,12 @@ def edit_question(qid: int, q: QuestionUpdate, user_id: str = Depends(get_curren
 @app.get("/api/activity/today")
 def activity_today(user_id: str = Depends(get_current_user_id)):
     return get_today_activity(user_id)
+
+
+@app.get("/api/activity/heatmap")
+def activity_heatmap(user_id: str = Depends(get_current_user_id)):
+    """Daily activity counts (UTC days) for the last ~53 weeks: {date: count}."""
+    return get_activity_heatmap(user_id)
 
 
 @app.get("/api/stats")
