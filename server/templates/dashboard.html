@@ -324,7 +324,10 @@
   .flex-content .flex-top-pat .pc { color: var(--muted); font-weight: 600; }
   .flex-content .flex-streaks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
   .flex-content .flex-streak { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px; text-align: center; }
-  .flex-content .flex-streak .fl { font-size: 22px; margin-bottom: 2px; }
+  .flex-content .flex-streak .fl { font-size: 22px; margin-bottom: 2px; display: inline-block; }
+  .flex-content .flex-streak .fl.lit { animation: flame-bob 1.2s ease-in-out infinite; }
+  @keyframes flame-bob { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+  @media (prefers-reduced-motion: reduce) { .flex-content .flex-streak .fl.lit { animation: none; } }
   .flex-content .flex-streak .sn { font-size: 32px; font-weight: 800; color: #fff; line-height: 1; }
   .flex-content .flex-streak .sl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
   .flex-content .flex-share { text-align: center; padding-top: 8px; }
@@ -1697,13 +1700,26 @@ function renderFlex(el, d, userId) {
       </div>
     ` : ''}
     <div class="flex-streaks">
-      <div class="flex-streak"><div class="fl">&#128293;</div><div class="sn">${d.current_streak}</div><div class="sl">Current Streak</div></div>
+      <div class="flex-streak"><div class="fl${d.current_streak > 0 ? ' lit' : ''}">&#128293;</div><div class="sn">${d.current_streak}</div><div class="sl">Current Streak</div></div>
       <div class="flex-streak"><div class="fl">&#127942;</div><div class="sn">${d.longest_streak}</div><div class="sl">Longest Streak</div></div>
     </div>
     <div class="flex-share">
       <button id="flexShareBtn" onclick="copyFlexLink('${userId}')">Copy Flex Link</button>
     </div>
   `;
+
+  // Celebrate: one confetti burst per modal open, stats count up from zero.
+  // The static values above are the fallback if celebrate.js didn't load.
+  if (window.Celebrate) {
+    const statEls = el.querySelectorAll('.flex-stat .val');
+    Celebrate.countUp(statEls[0], d.total_solved);
+    Celebrate.countUp(statEls[1], d.total_time_hours, 900, v => (Math.round(v * 10) / 10).toString());
+    Celebrate.countUp(statEls[2], d.avg_rating, 900, v => (Math.round(v * 10) / 10) + '/5');
+    Celebrate.countUp(statEls[3], d.total_reviews);
+    el.querySelectorAll('.flex-streak .sn').forEach((sn, i) =>
+      Celebrate.countUp(sn, i === 0 ? d.current_streak : d.longest_streak));
+    Celebrate.confetti();
+  }
 }
 
 function copyFlexLink(userId) {
@@ -1892,6 +1908,7 @@ function populatePatternDropdown() {
 initAuth();
 </script>
 <script src="/static/history.js"></script>
+<script src="/static/celebrate.js"></script>
 <script src="https://bugs.mrinal.dev/widget.js" data-service="revise" data-identity-jwt="localStorage:auth" defer></script>
 <script src="/static/bug-report.js" defer></script>
 </body>
