@@ -3,10 +3,14 @@
 import os
 import re
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from urllib.parse import urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
 from supabase import create_client
+
+# IANA zone used when a user hasn't picked one (or before migration 007).
+DEFAULT_TIMEZONE = "Asia/Kolkata"
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -301,25 +305,71 @@ def get_questions_activity_summary(user_id: str) -> dict:
     return summary
 
 
-def _bucket_event_days(timestamps: list) -> dict[str, int]:
-    """Bucket ISO timestamps into UTC-day (YYYY-MM-DD) -> count.
+def _safe_zone(tz_name: str | None) -> ZoneInfo:
+    """ZoneInfo for tz_name, falling back to the default on bad/missing values."""
+    try:
+        return ZoneInfo(tz_name or DEFAULT_TIMEZONE)
+    except Exception:
+        return ZoneInfo(DEFAULT_TIMEZONE)
 
-    UTC-day slicing matches every other per-day computation in this module
-    (streaks, activity summaries), so the heatmap lights the same squares
-    the streak logic counts.
+
+def _to_local_day(ts: str, zone: ZoneInfo) -> str | None:
+    """ISO timestamp -> YYYY-MM-DD in the given zone (None if unparseable).
+
+    Supabase returns timestamptz as '+00:00'-suffixed ISO; tolerate 'Z' and
+    naive strings (treated as UTC) for older/reconstructed rows.
     """
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=dt_timezone.utc)
+    return dt.astimezone(zone).date().isoformat()
+
+
+def _bucket_event_days(timestamps: list, tz_name: str = DEFAULT_TIMEZONE) -> dict[str, int]:
+    """Bucket ISO timestamps into local-day (YYYY-MM-DD) -> count.
+
+    Days are local to the user's profile timezone — the same convention the
+    streak logic uses, so the heatmap lights the squares streaks count.
+    """
+    zone = _safe_zone(tz_name)
     counts: dict[str, int] = defaultdict(int)
     for ts in timestamps:
-        if ts:
-            counts[ts[:10]] += 1
+        day = _to_local_day(ts, zone)
+        if day:
+            counts[day] += 1
     return dict(counts)
 
 
-def _compute_streaks(activity_dates: set[str]) -> tuple[int, int]:
+def get_user_timezone(user_id: str) -> str:
+    """The user's IANA timezone, defaulting to IST (also pre-migration 007)."""
+    try:
+        client = get_client()
+        result = (
+            client.table("user_profiles")
+            .select("timezone")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if result.data and result.data[0].get("timezone"):
+            return result.data[0]["timezone"]
+    except Exception as e:
+        print(f"[profile] timezone read failed (run migration 007?): {e}")
+    return DEFAULT_TIMEZONE
+
+
+def _compute_streaks(activity_dates: set[str], today: date | None = None) -> tuple[int, int]:
     """(current_streak, longest_streak) from a set of YYYY-MM-DD strings.
 
     The current streak counts consecutive days ending today or yesterday
     (yesterday keeps a streak alive until the day is actually missed).
+    `today` should be the user's local today so the cutoff matches the
+    timezone the dates were bucketed in.
     """
     if not activity_dates:
         return 0, 0
@@ -336,7 +386,8 @@ def _compute_streaks(activity_dates: set[str]) -> tuple[int, int]:
     longest_streak = max(longest_streak, streak)
 
     current_streak = 0
-    today = date.today()
+    if today is None:
+        today = date.today()
     if sorted_dates[-1] >= today - timedelta(days=1):
         current_streak = 1
         for i in range(len(sorted_dates) - 2, -1, -1):
@@ -348,13 +399,17 @@ def _compute_streaks(activity_dates: set[str]) -> tuple[int, int]:
 
 
 def get_activity_heatmap(user_id: str, days: int = 371) -> dict[str, int]:
-    """Daily activity counts (solves + revisions) for the last ~53 weeks.
+    """Daily activity counts (solves + revisions) for the last ~53 weeks,
+    bucketed into the user's profile timezone.
 
     'attempted' events are excluded — they're timer-start artifacts and would
     double-count against the 'created'/'reviewed' rows written on finish.
     """
+    tz_name = get_user_timezone(user_id)
     client = get_client()
-    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    # One extra day of slack so a UTC cutoff can't clip events that fall
+    # inside the window once shifted into a UTC+N zone.
+    cutoff = (date.today() - timedelta(days=days + 1)).isoformat()
     timestamps: list[str] = []
     start, page = 0, 1000  # PostgREST silently truncates at 1000 rows/request
     while True:
@@ -372,7 +427,7 @@ def get_activity_heatmap(user_id: str, days: int = 371) -> dict[str, int]:
         if len(rows) < page:
             break
         start += page
-    return _bucket_event_days(timestamps)
+    return _bucket_event_days(timestamps, tz_name)
 
 
 def find_by_url(user_id: str, url: str) -> dict | None:
@@ -606,6 +661,8 @@ def get_flex_stats(user_id: str) -> dict | None:
     if total == 0:
         return {"total_solved": 0}
 
+    zone = _safe_zone(get_user_timezone(user_id))
+
     by_difficulty: dict[str, int] = {}
     by_platform: dict[str, int] = {}
     ratings = []
@@ -628,17 +685,21 @@ def get_flex_stats(user_id: str) -> dict | None:
 
         total_reviews += (r.get("attempts") or 1)
 
-        # Collect activity dates for streak calculation
-        if r.get("solved_at"):
-            activity_dates.add(r["solved_at"][:10])
-        if r.get("last_reviewed"):
-            activity_dates.add(r["last_reviewed"][:10])
+        # Collect activity dates (user-local days) for streak calculation
+        solved_day = _to_local_day(r.get("solved_at"), zone)
+        if solved_day:
+            activity_dates.add(solved_day)
+        reviewed_day = _to_local_day(r.get("last_reviewed"), zone)
+        if reviewed_day:
+            activity_dates.add(reviewed_day)
 
     avg_rating = round(sum(ratings) / len(ratings), 1) if ratings else 0
     total_time_hours = round(total_time_mins / 60, 1)
 
-    # Streak calculation
-    current_streak, longest_streak = _compute_streaks(activity_dates)
+    # Streak calculation, anchored to the user's local today
+    current_streak, longest_streak = _compute_streaks(
+        activity_dates, today=datetime.now(zone).date()
+    )
 
     # Pattern stats
     tracked_nums: set[int] = set()
@@ -763,35 +824,43 @@ def ensure_user_profile(user_id: str, email: str | None = None) -> dict:
     return row
 
 
-PROFILE_COLUMNS = "user_id, email, display_name, avatar_url, platform_links"
+PROFILE_COLUMNS = "user_id, email, display_name, avatar_url, platform_links, timezone"
+# Pre-migration-007 column set, so a fresh deploy still serves profiles.
+LEGACY_PROFILE_COLUMNS = "user_id, email, display_name, avatar_url, platform_links"
 
 
 def get_profile(user_id: str) -> dict:
     """The user's public-facing profile fields (plus cached email).
 
-    Degrades to an empty profile if the columns don't exist yet (code deployed
-    before migration 006) so pages that embed profile data keep working."""
-    try:
-        client = get_client()
-        result = (
-            client.table("user_profiles")
-            .select(PROFILE_COLUMNS)
-            .eq("user_id", user_id)
-            .limit(1)
-            .execute()
-        )
-        if result.data:
-            row = result.data[0]
-            row["platform_links"] = row.get("platform_links") or {}
-            return row
-    except Exception as e:
-        print(f"[profile] read failed (run migration 006?): {e}")
+    Degrades gracefully if columns don't exist yet: retries without the
+    timezone column (pre-007), and falls back to an empty profile if even
+    the 006 columns are missing, so pages that embed profile data keep
+    working."""
+    client = get_client()
+    for cols in (PROFILE_COLUMNS, LEGACY_PROFILE_COLUMNS):
+        try:
+            result = (
+                client.table("user_profiles")
+                .select(cols)
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            if result.data:
+                row = result.data[0]
+                row["platform_links"] = row.get("platform_links") or {}
+                row["timezone"] = row.get("timezone") or DEFAULT_TIMEZONE
+                return row
+            break  # query worked, user simply has no row yet
+        except Exception as e:
+            print(f"[profile] read failed (run migrations 006/007?): {e}")
     return {
         "user_id": user_id,
         "email": None,
         "display_name": None,
         "avatar_url": None,
         "platform_links": {},
+        "timezone": DEFAULT_TIMEZONE,
     }
 
 

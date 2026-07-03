@@ -5,6 +5,7 @@ import re
 from datetime import date
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -222,6 +223,7 @@ class RefreshRequest(BaseModel):
 class ProfileUpdate(BaseModel):
     display_name: Optional[str] = None
     platform_links: Optional[dict[str, str]] = None
+    timezone: Optional[str] = None
 
 
 class FeatureToggle(BaseModel):
@@ -317,6 +319,13 @@ def save_profile(p: ProfileUpdate, user_id: str = Depends(get_current_user_id)):
                 link = "https://" + link
             links[name] = link[:500]
         updates["platform_links"] = links
+    if p.timezone is not None:
+        tz = p.timezone.strip()
+        try:
+            ZoneInfo(tz)
+        except Exception:
+            raise HTTPException(400, f"Unknown timezone: {tz}")
+        updates["timezone"] = tz
     if not updates:
         raise HTTPException(400, "No fields to update")
     return update_profile(user_id, updates)

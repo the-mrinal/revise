@@ -60,3 +60,28 @@ def test_delete_question_unknown_404(client, monkeypatch):
     monkeypatch.setattr(main_module, "delete_question", lambda uid, qid: False)
     r = client.delete("/api/questions/999")
     assert r.status_code == 404
+
+
+# --- PUT /api/profile (timezone) ---
+
+def test_profile_accepts_valid_timezone(client, monkeypatch):
+    saved = {}
+
+    def fake_update(user_id, updates):
+        saved.update(updates)
+        return {"user_id": user_id, **updates}
+
+    monkeypatch.setattr(main_module, "update_profile", fake_update)
+    r = client.put("/api/profile", json={"timezone": "America/New_York"})
+    assert r.status_code == 200
+    assert saved["timezone"] == "America/New_York"
+
+
+def test_profile_rejects_unknown_timezone(client, monkeypatch):
+    def fail(uid, updates):
+        raise AssertionError("update_profile must not be called")
+
+    monkeypatch.setattr(main_module, "update_profile", fail)
+    r = client.put("/api/profile", json={"timezone": "Mars/Olympus_Mons"})
+    assert r.status_code == 400
+    assert "timezone" in r.json()["detail"].lower()
