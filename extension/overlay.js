@@ -10,6 +10,9 @@
   let widgetHost = null;
   let widgetShadow = null;
   let widgetInterval = null;
+  let widgetDrag = null;
+  let suppressWidgetClick = false;
+  let widgetResizeTimeout = null;
 
   // --- Auth helpers ---
   function getAuth() {
@@ -105,6 +108,7 @@
         padding: 8px 14px;
         cursor: pointer;
         user-select: none;
+        touch-action: none;
         box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         transition: border-color 0.2s, box-shadow 0.2s;
       }
@@ -168,6 +172,21 @@
       .notes-btn:hover {
         background: rgba(91, 106, 191, 0.5);
       }
+      .cancel-btn {
+        background: rgba(220, 38, 38, 0.15);
+        border: 1px solid rgba(220, 38, 38, 0.4);
+        border-radius: 6px;
+        color: #fca5a5;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 4px 7px;
+        cursor: pointer;
+        line-height: 1;
+        transition: background 0.2s;
+      }
+      .cancel-btn:hover {
+        background: rgba(220, 38, 38, 0.35);
+      }
     `;
 
     const container = document.createElement("div");
@@ -179,6 +198,7 @@
           <div class="time" id="revise-widget-time">00:00:00</div>
         </div>
         <button class="notes-btn" id="revise-widget-notes">Notes</button>
+        <button class="cancel-btn" id="revise-widget-cancel" title="Discard attempt">&#10005;</button>
       </div>
     `;
 
@@ -188,13 +208,84 @@
 
     widgetShadow.getElementById("revise-widget-notes").addEventListener("click", (e) => {
       e.stopPropagation();
+      if (suppressWidgetClick) return;
       togglePanel();
     });
 
+    widgetShadow.getElementById("revise-widget-cancel").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (suppressWidgetClick) return;
+      cancelAttemptOverlay();
+    });
+
     widgetShadow.getElementById("revise-widget").addEventListener("click", () => {
+      if (suppressWidgetClick) return;
       togglePanel();
     });
+
+    initWidgetDrag(widgetShadow.getElementById("revise-widget"));
+    try {
+      chrome.storage.local.get("timerWidgetPos", (data) => {
+        if (!chrome.runtime.lastError) applyWidgetPos(data.timerWidgetPos);
+      });
+    } catch { /* extension context invalidated */ }
   }
+
+  // Position is stored as viewport px and applied as inline !important styles,
+  // which beat the stylesheet's bottom/right defaults. Clamp on every apply
+  // (not just on save) so a position saved on a bigger window can't strand
+  // the widget off-screen.
+  function applyWidgetPos(pos) {
+    if (!widgetHost || !pos || typeof pos.left !== "number" || typeof pos.top !== "number") return;
+    const r = widgetHost.getBoundingClientRect();
+    const left = Math.min(Math.max(0, pos.left), window.innerWidth - (r.width || 160));
+    const top = Math.min(Math.max(0, pos.top), window.innerHeight - (r.height || 48));
+    widgetHost.style.setProperty("left", left + "px", "important");
+    widgetHost.style.setProperty("top", top + "px", "important");
+    widgetHost.style.setProperty("right", "auto", "important");
+    widgetHost.style.setProperty("bottom", "auto", "important");
+  }
+
+  function initWidgetDrag(widgetEl) {
+    widgetEl.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      const r = widgetHost.getBoundingClientRect();
+      widgetDrag = { startX: e.clientX, startY: e.clientY, origLeft: r.left, origTop: r.top, moved: false };
+      widgetEl.setPointerCapture(e.pointerId);
+    });
+    widgetEl.addEventListener("pointermove", (e) => {
+      if (!widgetDrag) return;
+      const dx = e.clientX - widgetDrag.startX;
+      const dy = e.clientY - widgetDrag.startY;
+      if (!widgetDrag.moved && Math.hypot(dx, dy) < 5) return;
+      widgetDrag.moved = true;
+      applyWidgetPos({ left: widgetDrag.origLeft + dx, top: widgetDrag.origTop + dy });
+    });
+    widgetEl.addEventListener("pointerup", () => {
+      if (!widgetDrag) return;
+      if (widgetDrag.moved) {
+        // A drag just ended on this spot — swallow the click that follows it.
+        suppressWidgetClick = true;
+        setTimeout(() => { suppressWidgetClick = false; }, 0);
+        const r = widgetHost.getBoundingClientRect();
+        try { chrome.storage.local.set({ timerWidgetPos: { left: r.left, top: r.top } }); } catch {}
+      }
+      widgetDrag = null;
+    });
+    widgetEl.addEventListener("pointercancel", () => { widgetDrag = null; });
+  }
+
+  window.addEventListener("resize", () => {
+    if (!widgetHost) return;
+    clearTimeout(widgetResizeTimeout);
+    widgetResizeTimeout = setTimeout(() => {
+      try {
+        chrome.storage.local.get("timerWidgetPos", (data) => {
+          if (!chrome.runtime.lastError) applyWidgetPos(data.timerWidgetPos);
+        });
+      } catch {}
+    }, 200);
+  });
 
   function destroyWidget() {
     if (widgetInterval) {
@@ -388,6 +479,11 @@
       }
       .timer-btn.stop {
         background: #4c1d1d;
+        color: #fca5a5;
+      }
+      .timer-btn.cancel {
+        background: rgba(220, 38, 38, 0.12);
+        border: 1px solid rgba(220, 38, 38, 0.35);
         color: #fca5a5;
       }
 
@@ -633,14 +729,17 @@
           <div class="timer-controls">
             <button class="timer-btn ${pauseBtnClass}" id="revise-panel-pause">${pauseBtnText}</button>
             <button class="timer-btn stop" id="revise-panel-stop">Stop</button>
+            <button class="timer-btn cancel" id="revise-panel-cancel">Cancel</button>
           </div>
         </div>
       `;
 
       const pauseBtn = shadow.getElementById("revise-panel-pause");
       const stopBtn = shadow.getElementById("revise-panel-stop");
+      const cancelBtn = shadow.getElementById("revise-panel-cancel");
       if (pauseBtn) pauseBtn.addEventListener("click", toggleTimerPause);
       if (stopBtn) stopBtn.addEventListener("click", stopTimer);
+      if (cancelBtn) cancelBtn.addEventListener("click", cancelAttemptOverlay);
     }); } catch { /* extension context invalidated */ }
   }
 
@@ -884,6 +983,25 @@
       stopTimerDisplay();
       renderFinishForm(timer);
     });
+  }
+
+  // Mirrors the popup's cancelAttempt(): a question created just for this
+  // attempt is deleted outright; an existing one only gets its attempt bump
+  // rolled back. Timers from older versions lack wasExisting and take the
+  // safe rollback route. The timer key is cleared even if the server call
+  // fails, and chrome.storage.onChanged tears down the widget on all tabs.
+  async function cancelAttemptOverlay() {
+    const timer = await getTimer();
+    if (!timer || !timer.questionId) return;
+    if (!confirm("Discard this attempt? Nothing will be recorded.")) return;
+    try {
+      if (timer.wasExisting === false) {
+        await apiFetch(`/questions/${timer.questionId}`, { method: "DELETE" });
+      } else {
+        await apiFetch(`/questions/${timer.questionId}/cancel-attempt`, { method: "POST" });
+      }
+    } catch { /* clear locally regardless */ }
+    try { chrome.storage.local.remove("timer"); } catch {}
   }
 
   function renderFinishForm(timer) {
