@@ -7,14 +7,95 @@
 <style>
   :root { --bg: #0a0a0a; --card: #111; --border: #222; --accent: #5b6abf; --text: #ddd; --muted: #777; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px 32px; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   h1 { font-size: 22px; margin-bottom: 4px; }
   .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
 
-  .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-  .user-email { color: #9ca3af; font-size: 12px; margin-right: 8px; }
-  .sign-out-btn { background: none; border: 1px solid #4c1d1d; color: #fca5a5; padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
-  .sign-out-btn:hover { background: #4c1d1d; }
+  /* Layout: collapsible left sidebar + main pane */
+  .layout { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 210px; flex-shrink: 0; border-right: 1px solid var(--border); background: #0d0d0d;
+    position: sticky; top: 0; height: 100vh; padding: 18px 10px 14px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 2px; transition: width .15s ease;
+  }
+  .side-brand { font-size: 18px; font-weight: 800; padding: 0 12px 14px; letter-spacing: -0.3px; white-space: nowrap; }
+  .side-nav { display: flex; flex-direction: column; gap: 2px; }
+  .side-nav button {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    background: none; border: 1px solid transparent; color: var(--muted); padding: 9px 12px;
+    border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: color .15s, background .15s; white-space: nowrap;
+  }
+  .side-nav button:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+  .side-nav button.active { background: var(--card); color: var(--text); border-color: var(--border); }
+  .side-nav .ic { width: 16px; text-align: center; flex-shrink: 0; }
+  .side-sep { border-top: 1px solid var(--border); margin: 12px 8px; }
+  .side-links { display: flex; flex-direction: column; gap: 2px; }
+  .side-links a, .side-links button {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    color: var(--muted); padding: 8px 12px; border-radius: 8px; font-size: 12.5px; cursor: pointer;
+    text-decoration: none; white-space: nowrap;
+  }
+  .side-links a:hover, .side-links button:hover { color: var(--text); background: rgba(255,255,255,0.04); text-decoration: none; }
+  .side-quicklinks { margin-top: auto; padding: 8px 0 0; display: flex; flex-direction: column; gap: 1px; }
+  .side-quicklinks .ql-h { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; padding: 0 12px 6px; }
+  .side-quicklinks .ql { display: block; font-size: 12px; color: var(--muted); padding: 5px 12px; border-radius: 6px; text-transform: capitalize; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .side-quicklinks .ql:hover { color: var(--text); background: rgba(255,255,255,0.04); text-decoration: none; }
+  .side-collapse {
+    margin-top: 10px; background: none; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 8px; padding: 6px; font-size: 12px; cursor: pointer; flex-shrink: 0;
+  }
+  .side-collapse:hover { color: var(--text); border-color: var(--accent); }
+  body.side-collapsed .sidebar { width: 58px; padding-left: 8px; padding-right: 8px; }
+  body.side-collapsed .side-brand,
+  body.side-collapsed .side-nav .tx,
+  body.side-collapsed .side-links,
+  body.side-collapsed .side-quicklinks { display: none; }
+  .main { flex: 1; min-width: 0; max-width: 1240px; padding: 20px 32px 48px; }
+  .scrim { display: none; }
+
+  /* Topbar: brand (mobile) + profile chip */
+  .topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .topbar h1 { display: none; font-size: 20px; margin: 0; }
+  .topbar .spacer { flex: 1; }
+  .hamburger { display: none; background: none; border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 5px 10px; font-size: 15px; cursor: pointer; }
+  .profile-menu { position: relative; }
+  .chip { background: none; border: none; padding: 0; cursor: pointer; }
+  .chip-avatar {
+    display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%;
+    background: #1e1b4b; color: #a5b4fc; font-size: 14px; font-weight: 700; border: 1px solid var(--border);
+    background-size: cover; background-position: center;
+  }
+  .chip:hover .chip-avatar { border-color: var(--accent); }
+  .dropdown {
+    position: absolute; right: 0; top: calc(100% + 8px); min-width: 210px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 10px; padding: 6px; z-index: 100;
+    box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+  .dropdown[hidden] { display: none; }
+  .dd-email { font-size: 11.5px; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--border); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dropdown button { display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  .dropdown button:hover { background: rgba(255,255,255,0.06); }
+  .dd-sep { border-top: 1px solid var(--border); margin: 4px 0; }
+  .dropdown #signOutBtn { color: #fca5a5; }
+
+  @media (max-width: 768px) {
+    .sidebar {
+      position: fixed; left: 0; top: 0; z-index: 150; transform: translateX(-100%);
+      transition: transform .2s ease; background: var(--bg); box-shadow: 4px 0 24px rgba(0,0,0,.5);
+    }
+    body.side-open .sidebar { transform: none; }
+    /* collapse is a desktop-only concept — the drawer always shows full labels */
+    body.side-collapsed .sidebar { width: 210px; padding: 18px 10px 14px; }
+    body.side-collapsed .side-brand { display: block; }
+    body.side-collapsed .side-nav .tx { display: inline; }
+    body.side-collapsed .side-links, body.side-collapsed .side-quicklinks { display: flex; }
+    .side-collapse { display: none; }
+    body.side-open .scrim { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 140; }
+    .hamburger { display: inline-block; }
+    .topbar h1 { display: block; }
+    .main { padding: 16px 16px 40px; }
+  }
 
   .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-bottom: 28px; }
   .stat-card {
@@ -170,11 +251,7 @@
   .recommend-card .rec-title a { color: #7c9cff; }
   .recommend-card .rec-pattern { font-size: 11px; color: var(--muted); }
 
-  /* Tab bar */
-  .tab-bar { display: flex; gap: 6px; margin-bottom: 24px; }
-  .tab-bar button { padding: 6px 16px; border-radius: 4px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-size: 12px; cursor: pointer; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; transition: border-color 0.2s, color 0.2s; }
-  .tab-bar button.active { border-color: var(--accent); color: var(--text); }
-  .tab-bar button:hover { border-color: var(--accent); }
+  /* Tab panels (nav lives in the sidebar) */
   .tab-content { display: none; }
   .tab-content.active { display: block; }
 
@@ -282,6 +359,10 @@
 </style>
 </head>
 <body>
+<script>
+  // Applied before first paint so a collapsed sidebar doesn't flash open.
+  if (localStorage.getItem('sidebar-collapsed') === '1') document.body.classList.add('side-collapsed');
+</script>
 
 <!-- Login overlay -->
 <div class="login-overlay" id="loginOverlay">
@@ -294,28 +375,49 @@
   </div>
 </div>
 
-<div class="header-row">
-  <h1>Revise</h1>
-  <div style="display:flex;align-items:center;gap:8px;">
-    <a id="researchLink" href="/research" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;text-decoration:none;">Research</a>
-    <a href="/prep" style="background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;text-decoration:none;display:inline-block;">Interview Prep</a>
-    <button id="flexBtn" onclick="openFlex()" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;">Flex</button>
-    <button id="profileBtn" onclick="openProfile()" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;">Profile</button>
-    <button class="settings-btn" id="settingsBtn" style="display:none;background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;">Settings</button>
-    <span class="user-email" id="userEmail" style="display:none"></span>
-    <button class="sign-out-btn" id="signOutBtn" style="display:none">Sign Out</button>
-  </div>
-</div>
-<p class="subtitle">Spaced repetition for everything you learn</p>
+<div class="layout">
 
-<div class="tab-bar" id="tabBar">
-  <button class="active" data-tab="overview">Overview</button>
-  <button data-tab="today">Today</button>
-  <button data-tab="revised">Revised</button>
-  <button data-tab="patterns">Pattern</button>
-  <button data-tab="all">All Items</button>
-  <button data-tab="new">New Problem</button>
-</div>
+<aside class="sidebar" id="sidebar">
+  <div class="side-brand">Revise</div>
+  <nav class="side-nav" id="tabBar">
+    <button class="active" data-tab="overview"><span class="ic">&#9707;</span><span class="tx">Overview</span></button>
+    <button data-tab="today"><span class="ic">&#9728;</span><span class="tx">Today</span></button>
+    <button data-tab="revised"><span class="ic">&#8635;</span><span class="tx">Revised</span></button>
+    <button data-tab="patterns"><span class="ic">&#9671;</span><span class="tx">Pattern</span></button>
+    <button data-tab="all"><span class="ic">&#8801;</span><span class="tx">All Items</span></button>
+    <button data-tab="new"><span class="ic">+</span><span class="tx">New Problem</span></button>
+  </nav>
+  <div class="side-sep"></div>
+  <nav class="side-links">
+    <a id="researchLink" href="/research" style="display:none">Research</a>
+    <a href="/prep">Interview Prep</a>
+    <button id="flexBtn" onclick="openFlex()" style="display:none">Flex &#128293;</button>
+  </nav>
+  <div class="side-quicklinks" id="quickLinks"></div>
+  <button class="side-collapse" id="sidebarToggle" title="Toggle sidebar">&#10218;&#10219;</button>
+</aside>
+
+<div class="scrim" id="sideScrim"></div>
+
+<main class="main">
+
+<header class="topbar">
+  <button class="hamburger" id="hamburgerBtn" aria-label="Open menu">&#9776;</button>
+  <h1>Revise</h1>
+  <div class="spacer"></div>
+  <div class="profile-menu" id="profileMenu" style="display:none">
+    <button id="profileChip" class="chip" aria-haspopup="menu" title="Account">
+      <span class="chip-avatar" id="chipAvatar">?</span>
+    </button>
+    <div class="dropdown" id="profileDropdown" hidden>
+      <div class="dd-email" id="userEmail"></div>
+      <button onclick="openProfile()">Profile</button>
+      <button id="settingsBtn">Settings</button>
+      <div class="dd-sep"></div>
+      <button id="signOutBtn">Sign out</button>
+    </div>
+  </div>
+</header>
 
 <div class="tab-content active" id="tab-overview">
   <div id="profileNudge"></div>
@@ -418,6 +520,9 @@
     </table>
   </div>
 </div>
+
+</main>
+</div><!-- /.layout -->
 
 <div class="modal-overlay" id="editModal">
   <div class="modal">
@@ -557,18 +662,19 @@ let sortKey = "solved_at", sortDir = -1;
 let activitySummary = {};   // qid -> {first_solved_on, revision_count, last_revised_at}
 let queueSize = null;       // user's configured revision queue size (0 = unlimited)
 
-// --- Tab switching ---
+// --- Tab switching (sidebar nav) ---
 function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.tab-bar button').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('#tabBar button').forEach(btn => btn.classList.remove('active'));
   const tab = document.getElementById('tab-' + name);
-  const btn = document.querySelector(`.tab-bar button[data-tab="${name}"]`);
+  const btn = document.querySelector(`#tabBar button[data-tab="${name}"]`);
   if (tab) tab.classList.add('active');
   if (btn) btn.classList.add('active');
   localStorage.setItem('dashboard-tab', name);
+  document.body.classList.remove('side-open');  // close the mobile drawer
 }
 
-document.querySelectorAll('.tab-bar button').forEach(btn => {
+document.querySelectorAll('#tabBar button').forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
 
@@ -579,6 +685,52 @@ document.querySelectorAll('.tab-bar button').forEach(btn => {
     switchTab(saved);
   }
 })();
+
+// --- Sidebar collapse (desktop) + drawer (mobile) ---
+document.getElementById('sidebarToggle').addEventListener('click', () => {
+  const collapsed = document.body.classList.toggle('side-collapsed');
+  localStorage.setItem('sidebar-collapsed', collapsed ? '1' : '0');
+});
+document.getElementById('hamburgerBtn').addEventListener('click', () => {
+  document.body.classList.toggle('side-open');
+});
+document.getElementById('sideScrim').addEventListener('click', () => {
+  document.body.classList.remove('side-open');
+});
+
+// --- Profile dropdown ---
+function closeProfileMenu() {
+  document.getElementById('profileDropdown').hidden = true;
+}
+document.getElementById('profileChip').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const dd = document.getElementById('profileDropdown');
+  dd.hidden = !dd.hidden;
+});
+document.getElementById('profileDropdown').addEventListener('click', (e) => {
+  if (e.target.tagName === 'BUTTON') closeProfileMenu();
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.profile-menu')) closeProfileMenu();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeProfileMenu();
+});
+
+// The chip shows the avatar if one is set, else the first letter of the
+// display name (or email as a last resort).
+function updateChipAvatar(fallback) {
+  const el = document.getElementById('chipAvatar');
+  const p = myProfile || {};
+  if (p.avatar_url) {
+    el.style.backgroundImage = `url("${p.avatar_url}")`;
+    el.textContent = '';
+  } else {
+    el.style.backgroundImage = '';
+    const name = (p.display_name || fallback || p.email || '?').trim();
+    el.textContent = name.charAt(0).toUpperCase() || '?';
+  }
+}
 
 // --- Auth helpers ---
 function getAuth() {
@@ -645,13 +797,13 @@ function captureTokensFromHash() {
 // --- Login overlay ---
 function showLogin() {
   document.getElementById("loginOverlay").classList.add("open");
-  document.getElementById("signOutBtn").style.display = "none";
-  document.getElementById("userEmail").style.display = "none";
+  document.getElementById("profileMenu").style.display = "none";
+  document.getElementById("flexBtn").style.display = "none";
+  closeProfileMenu();
 }
 
 function hideLogin() {
   document.getElementById("loginOverlay").classList.remove("open");
-  document.getElementById("signOutBtn").style.display = "inline-block";
   showSettingsBtn();
   // Show email from JWT
   const auth = getAuth();
@@ -659,16 +811,15 @@ function hideLogin() {
     try {
       const payload = JSON.parse(atob(auth.access_token.split(".")[1]));
       if (payload.email) {
-        const el = document.getElementById("userEmail");
-        el.textContent = payload.email;
-        el.style.display = "inline";
+        document.getElementById("userEmail").textContent = payload.email;
+        updateChipAvatar(payload.email);
         const researchAllowed = [
           'dmrinal626@gmail.com',
           'bibhashchandra4850@gmail.com',
           // add more emails here to grant Research access
         ];
         if (researchAllowed.includes(payload.email)) {
-          document.getElementById("researchLink").style.display = "inline-block";
+          document.getElementById("researchLink").style.display = "block";
         }
       }
     } catch {}
@@ -766,7 +917,8 @@ async function load() {
   populateFilters();
   populatePatternDropdown();
   renderTable();
-  loadProfile();  // not awaited: the nudge renders when it arrives
+  renderQuickLinks();  // platform names are known now; profile links refine it
+  loadProfile();  // not awaited: the nudge + quick links re-render when it arrives
 }
 
 // Per-question revision info, with a sensible fallback when no event log exists
@@ -1232,6 +1384,43 @@ async function loadProfile() {
     myProfile = r.ok ? await r.json() : null;
   } catch { myProfile = null; }
   renderProfileNudge();
+  renderQuickLinks();
+  updateChipAvatar();
+}
+
+// --- Sidebar quick links ---
+// One click out to the sites you practice on: your saved profile link when
+// you have one, otherwise the platform's practice page.
+const CANONICAL_LINKS = {
+  leetcode: "https://leetcode.com/problemset/",
+  codechef: "https://www.codechef.com/practice",
+  hackerrank: "https://www.hackerrank.com/dashboard",
+  codeforces: "https://codeforces.com/problemset",
+  geeksforgeeks: "https://www.geeksforgeeks.org/explore",
+  interviewbit: "https://www.interviewbit.com/practice/",
+  atcoder: "https://atcoder.jp/contests/",
+  neetcode: "https://neetcode.io/practice",
+  algomonster: "https://algo.monster/problems",
+  designgurus: "https://www.designgurus.io/",
+};
+
+function renderQuickLinks() {
+  const el = document.getElementById('quickLinks');
+  if (!el) return;
+  const links = (myProfile && myProfile.platform_links) || {};
+  const names = [...new Set([
+    ...usedPlatforms().map(p => p.toLowerCase()),
+    ...Object.keys(links).filter(k => links[k]),
+  ])];
+  const items = names
+    .map(n => ({ n, url: links[n] || CANONICAL_LINKS[n] }))
+    .filter(x => x.url)
+    .sort((a, b) => a.n.localeCompare(b.n))
+    .slice(0, 6);
+  el.innerHTML = items.length
+    ? '<div class="ql-h">Practice on</div>' + items.map(x =>
+        `<a class="ql" href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.n)} &#8599;</a>`).join('')
+    : '';
 }
 
 // Nudge: platforms you practice on but haven't linked a public profile for.
@@ -1314,6 +1503,8 @@ async function saveProfile() {
     status.textContent = 'Saved';
     status.style.color = '#6ee7b7';
     renderProfileNudge();
+    renderQuickLinks();
+    updateChipAvatar();
   } catch {
     status.textContent = 'Failed to save';
     status.style.color = '#fca5a5';
@@ -1344,6 +1535,7 @@ document.getElementById('avatarInput').addEventListener('change', async (e) => {
     const d = await r.json();
     if (myProfile) myProfile.avatar_url = d.avatar_url;
     renderAvatarPreview(d.avatar_url);
+    updateChipAvatar();
     status.textContent = 'Uploaded';
     status.style.color = '#6ee7b7';
   } catch (err) {
@@ -1546,11 +1738,11 @@ async function mergeDuplicates() {
 
 document.getElementById('settingsBtn').addEventListener('click', openSettings);
 
-// Show settings + flex + profile buttons when logged in
+// Show the profile chip + flex link when logged in (Profile/Settings/Sign out
+// live inside the chip's dropdown, so they need no individual toggling).
 function showSettingsBtn() {
-  document.getElementById('settingsBtn').style.display = 'inline-block';
-  document.getElementById('flexBtn').style.display = 'inline-block';
-  document.getElementById('profileBtn').style.display = 'inline-block';
+  document.getElementById('profileMenu').style.display = 'block';
+  document.getElementById('flexBtn').style.display = 'block';
 }
 
 // --- Patterns ---
