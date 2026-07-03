@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Revise — Flex</title>
+<script src="/static/celebrate.js"></script>
 <style>
   :root { --bg: #0a0a0a; --card: #111; --border: #222; --accent: #5b6abf; --text: #ddd; --muted: #777; --green: #6ee7b7; --yellow: #fbbf24; --red: #fca5a5; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -23,7 +24,13 @@
     color: #a5b4fc; font-size: 34px; font-weight: 800;
   }
   .display-name { font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 6px; }
-  .fun-title { font-size: 36px; font-weight: 800; background: linear-gradient(135deg, #a78bfa, #6ee7b7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; line-height: 1.2; }
+  .fun-title {
+    font-size: 36px; font-weight: 800; line-height: 1.2;
+    background: linear-gradient(135deg, #a78bfa, #6ee7b7, #a78bfa);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    background-size: 200% 200%; animation: title-shimmer 3s ease infinite;
+  }
+  @keyframes title-shimmer { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
   .fun-subtitle { color: var(--muted); font-size: 14px; margin-top: 8px; }
 
   /* Recent solves */
@@ -84,7 +91,12 @@
   /* Streak */
   .streak-section { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
   .streak-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; text-align: center; }
-  .streak-card .flame { font-size: 28px; margin-bottom: 4px; }
+  .streak-card .flame { font-size: 28px; margin-bottom: 4px; display: inline-block; }
+  .streak-card .flame.lit { animation: flame-bob 1.2s ease-in-out infinite; }
+  @keyframes flame-bob { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+  @media (prefers-reduced-motion: reduce) {
+    .flame.lit, .fun-title { animation: none; }
+  }
   .streak-card .streak-num { font-size: 40px; font-weight: 800; color: #fff; line-height: 1; }
   .streak-card .streak-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px; }
 
@@ -358,11 +370,16 @@ function render(d, isOwner) {
   if (d.total_solved > 0) subtitleParts.push(d.total_solved + ' problems solved');
   document.getElementById('funSubtitle').textContent = subtitleParts.join(' \u00B7 ');
 
-  // Stats
-  document.getElementById('statTotal').textContent = d.total_solved;
-  document.getElementById('statTime').textContent = d.total_time_hours;
-  document.getElementById('statRating').textContent = d.avg_rating + '/5';
-  document.getElementById('statReviews').textContent = d.total_reviews;
+  // Stats — count up from zero for a bit of showmanship (Celebrate falls
+  // back to setting the final value under prefers-reduced-motion)
+  const anim = window.Celebrate;
+  const setStat = (id, v, fmt) => anim
+    ? anim.countUp(document.getElementById(id), v, 900, fmt)
+    : (document.getElementById(id).textContent = fmt ? fmt(v) : v);
+  setStat('statTotal', d.total_solved);
+  setStat('statTime', d.total_time_hours, v => (Math.round(v * 10) / 10).toString());
+  setStat('statRating', d.avg_rating, v => (Math.round(v * 10) / 10) + '/5');
+  setStat('statReviews', d.total_reviews);
 
   // Difficulty bar
   const easy = d.by_difficulty.easy || 0;
@@ -428,9 +445,15 @@ function render(d, isOwner) {
     document.getElementById('patternsSection').classList.add('hidden');
   }
 
-  // Streaks
-  document.getElementById('currentStreak').textContent = d.current_streak;
-  document.getElementById('longestStreak').textContent = d.longest_streak;
+  // Streaks — the current-streak flame only dances while a streak is alive
+  setStat('currentStreak', d.current_streak);
+  setStat('longestStreak', d.longest_streak);
+  if (d.current_streak > 0) {
+    document.querySelector('.streak-card .flame').classList.add('lit');
+  }
+
+  // Somebody's showing off — make it feel like it
+  if (anim) anim.confetti();
 
   // Share
   if (isOwner) {
