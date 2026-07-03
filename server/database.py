@@ -270,6 +270,8 @@ def get_questions_activity_summary(user_id: str) -> dict:
         { qid: {first_solved_on, revision_count, last_revised_at} }
     """
     client = get_client()
+    # TODO: PostgREST caps responses at 1000 rows, so heavy users lose the
+    # oldest events here; paginate like get_activity_heatmap does.
     events = (
         client.table("question_events")
         .select("question_id, created_at")
@@ -297,6 +299,80 @@ def get_questions_activity_summary(user_id: str) -> dict:
             "last_revised_at": max(revision_times) if revision_times else None,
         }
     return summary
+
+
+def _bucket_event_days(timestamps: list) -> dict[str, int]:
+    """Bucket ISO timestamps into UTC-day (YYYY-MM-DD) -> count.
+
+    UTC-day slicing matches every other per-day computation in this module
+    (streaks, activity summaries), so the heatmap lights the same squares
+    the streak logic counts.
+    """
+    counts: dict[str, int] = defaultdict(int)
+    for ts in timestamps:
+        if ts:
+            counts[ts[:10]] += 1
+    return dict(counts)
+
+
+def _compute_streaks(activity_dates: set[str]) -> tuple[int, int]:
+    """(current_streak, longest_streak) from a set of YYYY-MM-DD strings.
+
+    The current streak counts consecutive days ending today or yesterday
+    (yesterday keeps a streak alive until the day is actually missed).
+    """
+    if not activity_dates:
+        return 0, 0
+    sorted_dates = sorted(set(date.fromisoformat(d) for d in activity_dates))
+
+    longest_streak = 0
+    streak = 1
+    for i in range(1, len(sorted_dates)):
+        if sorted_dates[i] - sorted_dates[i - 1] == timedelta(days=1):
+            streak += 1
+        else:
+            longest_streak = max(longest_streak, streak)
+            streak = 1
+    longest_streak = max(longest_streak, streak)
+
+    current_streak = 0
+    today = date.today()
+    if sorted_dates[-1] >= today - timedelta(days=1):
+        current_streak = 1
+        for i in range(len(sorted_dates) - 2, -1, -1):
+            if sorted_dates[i + 1] - sorted_dates[i] == timedelta(days=1):
+                current_streak += 1
+            else:
+                break
+    return current_streak, longest_streak
+
+
+def get_activity_heatmap(user_id: str, days: int = 371) -> dict[str, int]:
+    """Daily activity counts (solves + revisions) for the last ~53 weeks.
+
+    'attempted' events are excluded — they're timer-start artifacts and would
+    double-count against the 'created'/'reviewed' rows written on finish.
+    """
+    client = get_client()
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    timestamps: list[str] = []
+    start, page = 0, 1000  # PostgREST silently truncates at 1000 rows/request
+    while True:
+        rows = (
+            client.table("question_events")
+            .select("created_at")
+            .eq("user_id", user_id)
+            .in_("event_type", ["created", "reviewed"])
+            .gte("created_at", cutoff)
+            .order("created_at", desc=False)
+            .range(start, start + page - 1)
+            .execute()
+        ).data
+        timestamps.extend(r.get("created_at") for r in rows)
+        if len(rows) < page:
+            break
+        start += page
+    return _bucket_event_days(timestamps)
 
 
 def find_by_url(user_id: str, url: str) -> dict | None:
@@ -562,29 +638,7 @@ def get_flex_stats(user_id: str) -> dict | None:
     total_time_hours = round(total_time_mins / 60, 1)
 
     # Streak calculation
-    current_streak = 0
-    longest_streak = 0
-    if activity_dates:
-        sorted_dates = sorted(set(date.fromisoformat(d) for d in activity_dates))
-        # Longest streak
-        streak = 1
-        for i in range(1, len(sorted_dates)):
-            if sorted_dates[i] - sorted_dates[i - 1] == timedelta(days=1):
-                streak += 1
-            else:
-                longest_streak = max(longest_streak, streak)
-                streak = 1
-        longest_streak = max(longest_streak, streak)
-
-        # Current streak (consecutive days ending today or yesterday)
-        today = date.today()
-        if sorted_dates[-1] >= today - timedelta(days=1):
-            current_streak = 1
-            for i in range(len(sorted_dates) - 2, -1, -1):
-                if sorted_dates[i + 1] - sorted_dates[i] == timedelta(days=1):
-                    current_streak += 1
-                else:
-                    break
+    current_streak, longest_streak = _compute_streaks(activity_dates)
 
     # Pattern stats
     tracked_nums: set[int] = set()
