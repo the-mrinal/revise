@@ -382,17 +382,21 @@ function render(d, isOwner) {
     document.getElementById('diffSection').classList.add('hidden');
   }
 
-  // Platforms — pills link out to the user's public profile when they added one
+  // Platforms — pills link out to the user's public profile when they added one.
+  // Linked platforms show even with zero tracked solves.
   const platforms = d.by_platform || {};
   const links = d.platform_links || {};
   const pillsEl = document.getElementById('pills');
-  const sorted = Object.entries(platforms).sort((a, b) => b[1] - a[1]);
+  const byName = {};
+  Object.entries(platforms).forEach(([n, c]) => { byName[String(n).toLowerCase()] = { name: n, count: c }; });
+  Object.keys(links).forEach(n => { if (!byName[n]) byName[n] = { name: n, count: 0 }; });
+  const sorted = Object.values(byName).sort((a, b) => b.count - a.count);
   if (sorted.length > 0) {
-    sorted.forEach(([name, count]) => {
+    sorted.forEach(({ name, count }) => {
       const link = links[String(name).toLowerCase()];
       const pill = document.createElement(link ? 'a' : 'div');
       pill.className = 'pill';
-      pill.innerHTML = esc(name) + '<span class="count">' + count + '</span>' + (link ? ' ↗' : '');
+      pill.innerHTML = esc(name) + (count ? '<span class="count">' + count + '</span>' : '') + (link ? ' ↗' : '');
       if (link) {
         pill.href = link;
         pill.target = '_blank';

@@ -1395,8 +1395,20 @@ function renderFlex(el, d, userId) {
     if (hard) diffBar += `<div class="seg seg-hard" style="width:${hard/total*100}%">${hard}</div>`;
   }
 
-  const platforms = Object.entries(d.by_platform || {}).sort((a, b) => b[1] - a[1]);
-  const pills = platforms.map(([n, c]) => `<span class="flex-pill">${esc(n)}<span class="cnt">${c}</span></span>`).join('');
+  // Platform pills: merge solve counts with saved profile links so a linked
+  // platform shows even before any solves are logged on it.
+  const links = d.platform_links || {};
+  const byName = {};
+  Object.entries(d.by_platform || {}).forEach(([n, c]) => { byName[String(n).toLowerCase()] = { name: n, count: c }; });
+  Object.keys(links).forEach(n => { if (!byName[n]) byName[n] = { name: n, count: 0 }; });
+  const platforms = Object.values(byName).sort((a, b) => b.count - a.count);
+  const pills = platforms.map(({ name, count }) => {
+    const link = links[String(name).toLowerCase()];
+    const inner = `${esc(name)}${count ? `<span class="cnt">${count}</span>` : ''}${link ? ' ↗' : ''}`;
+    return link
+      ? `<a class="flex-pill" href="${esc(link)}" target="_blank" rel="noopener" style="text-decoration:none;">${inner}</a>`
+      : `<span class="flex-pill">${inner}</span>`;
+  }).join('');
 
   const topPats = (d.top_patterns || []).map(p => `<div class="flex-top-pat"><span class="nm">${esc(p.name)}</span><span class="pc">${p.pct}%</span></div>`).join('');
   const patPct = d.total_categories ? Math.round(d.patterns_mastered / d.total_categories * 100) : 0;
