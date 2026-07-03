@@ -660,6 +660,11 @@
       <input type="text" id="profileName" maxlength="80" placeholder="Shown on your flex page">
     </div>
     <div class="field">
+      <label>Timezone</label>
+      <select id="profileTimezone" style="width:100%;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;outline:none;"></select>
+      <p style="font-size:11px;color:var(--muted);margin-top:6px;">Sets which day your activity counts toward on the heatmap and streaks. Defaults to Indian Standard Time.</p>
+    </div>
+    <div class="field">
       <label>Platform Profiles</label>
       <div id="platformLinksList" style="max-height:220px;overflow-y:auto;"></div>
       <p style="font-size:11px;color:var(--muted);margin-top:6px;">Your public profile links on the platforms you practice on — shown on your flex page. Clear a field to remove the link.</p>
@@ -995,20 +1000,29 @@ const DIFF_ORDER = ["easy", "medium", "hard", "unknown"];
 const BAR_MAX_PX = 90;
 
 // LeetCode-style day grid: one column per week, Sunday at the top, ~53 weeks
-// ending today. Counts come keyed by UTC day (same convention as streaks).
+// ending today. The server buckets counts by the profile timezone, so the
+// grid anchors "today" in that same zone (not the browser's) and re-renders
+// once the profile arrives.
+let heatmapData = null;
+
 function renderHeatmap(counts) {
   const el = document.getElementById('heatmap');
   if (!el) return;
-  counts = counts || {};
-  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if (counts) heatmapData = counts;
+  counts = heatmapData || {};
+  const tz = (myProfile && myProfile.timezone) || DEFAULT_TIMEZONE;
+  let todayKey;
+  try { todayKey = new Date().toLocaleDateString('en-CA', { timeZone: tz }); }
+  catch { todayKey = new Date().toLocaleDateString('en-CA'); }
+  // From here on we walk plain calendar days, so a tz-free UTC cursor is exact.
+  const today = new Date(todayKey + 'T00:00:00Z');
   const start = new Date(today);
-  start.setDate(start.getDate() - (52 * 7 + today.getDay()));  // back to a Sunday
-  const fmtISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  start.setUTCDate(start.getUTCDate() - (52 * 7 + today.getUTCDay()));  // back to a Sunday
   const cells = [];
-  for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
-    const n = counts[fmtISO(d)] || 0;
+  for (let d = new Date(start); d <= today; d.setUTCDate(d.getUTCDate() + 1)) {
+    const n = counts[d.toISOString().slice(0, 10)] || 0;
     const lvl = n === 0 ? 0 : n <= 2 ? 1 : n <= 4 ? 2 : n <= 7 ? 3 : 4;
-    const label = `${n} ${n === 1 ? 'activity' : 'activities'} on ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    const label = `${n} ${n === 1 ? 'activity' : 'activities'} on ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}`;
     cells.push(`<div class="hm-cell${lvl ? ' l' + lvl : ''}" title="${label}"></div>`);
   }
   el.innerHTML = cells.join('');
@@ -1430,6 +1444,7 @@ async function loadProfile() {
   renderProfileNudge();
   renderQuickLinks();
   updateChipAvatar();
+  renderHeatmap();  // re-anchor "today" now that the profile timezone is known
 }
 
 // --- Sidebar quick links ---
@@ -1499,6 +1514,19 @@ function renderAvatarPreview(url, fallbackName) {
   }
 }
 
+const DEFAULT_TIMEZONE = 'Asia/Kolkata';
+
+// All IANA zones the browser knows, with a small fallback list for older
+// browsers without Intl.supportedValuesOf.
+function populateTimezoneSelect(selected) {
+  const sel = document.getElementById('profileTimezone');
+  let zones;
+  try { zones = Intl.supportedValuesOf('timeZone'); }
+  catch { zones = ['Asia/Kolkata', 'UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Europe/Berlin', 'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney']; }
+  if (selected && !zones.includes(selected)) zones = [selected, ...zones];
+  sel.innerHTML = zones.map(z => `<option value="${esc(z)}"${z === selected ? ' selected' : ''}>${esc(z.replace(/_/g, ' '))}</option>`).join('');
+}
+
 async function openProfile() {
   document.getElementById('profileModal').classList.add('open');
   document.getElementById('profileStatus').textContent = '';
@@ -1506,6 +1534,7 @@ async function openProfile() {
   if (!myProfile) await loadProfile();
   const p = myProfile || {};
   document.getElementById('profileName').value = p.display_name || '';
+  populateTimezoneSelect(p.timezone || DEFAULT_TIMEZONE);
   renderAvatarPreview(p.avatar_url, p.display_name || p.email);
   const links = p.platform_links || {};
   const names = [...new Set([...usedPlatforms().map(n => n.toLowerCase()), ...Object.keys(links)])].sort();
@@ -1540,6 +1569,7 @@ async function saveProfile() {
       body: JSON.stringify({
         display_name: document.getElementById('profileName').value,
         platform_links,
+        timezone: document.getElementById('profileTimezone').value || DEFAULT_TIMEZONE,
       }),
     });
     if (!r.ok) throw new Error();
@@ -1549,6 +1579,8 @@ async function saveProfile() {
     renderProfileNudge();
     renderQuickLinks();
     updateChipAvatar();
+    // A timezone change re-buckets the counts server-side — refetch.
+    apiFetch('/activity/heatmap').then(r => r.json()).then(h => renderHeatmap(h)).catch(() => {});
   } catch {
     status.textContent = 'Failed to save';
     status.style.color = '#fca5a5';
