@@ -202,6 +202,15 @@
   .hm-cell.l4 { background: #39d353; }
   .hm-legend { display: flex; align-items: center; gap: 4px; justify-content: flex-end; margin-top: 8px; font-size: 10px; color: var(--muted); }
   .hm-legend .hm-cell { width: 11px; height: 11px; display: inline-block; }
+  .hm-tip { display: none; position: fixed; z-index: 60; background: #1c2128; border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; font-size: 11px; line-height: 1.5; color: var(--text); pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,0.5); white-space: nowrap; }
+  .hm-tip.show { display: block; }
+  .hm-tip .tip-date { font-weight: 600; }
+  .hm-tip .tip-summary { color: var(--muted); }
+  .hm-tip .tip-summary b { color: var(--text); }
+  .hm-tip .tip-diff { display: flex; gap: 10px; margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--border); }
+  .hm-tip .tip-diff span { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+  .hm-tip .tip-diff b { color: var(--text); }
+  .hm-tip .tip-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
   .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
   .modal-overlay.open { display: flex; }
@@ -1034,12 +1043,16 @@ function renderHeatmap(counts) {
   const weekStarts = [];
   for (let d = new Date(start); d <= today; d.setUTCDate(d.getUTCDate() + 1)) {
     if (d.getUTCDay() === 0) weekStarts.push(new Date(d));
-    const n = counts[d.toISOString().slice(0, 10)] || 0;
+    const key = d.toISOString().slice(0, 10);
+    // Each day is {total, new, revised, difficulty:{...}}; older cached
+    // responses were plain numbers, so coerce either shape to a count.
+    const info = counts[key];
+    const n = typeof info === 'number' ? info : (info && info.total) || 0;
     const lvl = n === 0 ? 0 : n <= 2 ? 1 : n <= 4 ? 2 : n <= 7 ? 3 : 4;
-    const label = `${n} ${n === 1 ? 'activity' : 'activities'} on ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}`;
-    cells.push(`<div class="hm-cell${lvl ? ' l' + lvl : ''}" title="${label}"></div>`);
+    cells.push(`<div class="hm-cell${lvl ? ' l' + lvl : ''}" data-day="${key}"></div>`);
   }
   el.innerHTML = cells.join('');
+  wireHeatmapTip(el);
 
   // Month labels: one 11px slot per week column so they align with the grid.
   // Label each column where the month changes; the year is spelled out on the
@@ -1065,6 +1078,72 @@ function renderHeatmap(counts) {
 
   const scroll = document.getElementById('heatmapScroll');
   if (scroll) scroll.scrollLeft = scroll.scrollWidth;  // recent weeks visible on narrow screens
+}
+
+// --- Heatmap hover tooltip: per-day breakdown (new/revised, difficulty) ---
+const HM_DIFF_META = [
+  ['easy', '#6ee7b7', 'Easy'],
+  ['medium', '#fbbf24', 'Medium'],
+  ['hard', '#fca5a5', 'Hard'],
+  ['unknown', '#6b7280', 'Unrated'],
+];
+
+function heatmapTipHtml(key) {
+  const d = new Date(key + 'T00:00:00Z');
+  const dateStr = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  const info = (heatmapData || {})[key];
+  const total = typeof info === 'number' ? info : (info && info.total) || 0;
+  if (!total) return `<div class="tip-date">${dateStr}</div><div class="tip-summary">No activity</div>`;
+  const parts = [];
+  if (info.new) parts.push(`<b>${info.new}</b> new`);
+  if (info.revised) parts.push(`<b>${info.revised}</b> revised`);
+  const summary = `<b>${total}</b> ${total === 1 ? 'question' : 'questions'}${parts.length ? ' &middot; ' + parts.join(' &middot; ') : ''}`;
+  const chips = HM_DIFF_META
+    .filter(([k]) => (info.difficulty || {})[k])
+    .map(([k, color, label]) => `<span><i class="tip-dot" style="background:${color}"></i>${label} <b>${info.difficulty[k]}</b></span>`)
+    .join('');
+  return `<div class="tip-date">${dateStr}</div><div class="tip-summary">${summary}</div>${chips ? `<div class="tip-diff">${chips}</div>` : ''}`;
+}
+
+function getHeatmapTipEl() {
+  let tip = document.getElementById('hmTip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'hmTip';
+    tip.className = 'hm-tip';
+    document.body.appendChild(tip);
+  }
+  return tip;
+}
+
+function showHeatmapTip(cell) {
+  const tip = getHeatmapTipEl();
+  tip.innerHTML = heatmapTipHtml(cell.dataset.day);
+  tip.classList.add('show');
+  const r = cell.getBoundingClientRect();
+  // Above the cell, centered, clamped to the viewport; below if no headroom.
+  let left = Math.min(Math.max(6, r.left + r.width / 2 - tip.offsetWidth / 2), window.innerWidth - tip.offsetWidth - 6);
+  let top = r.top - tip.offsetHeight - 8;
+  if (top < 6) top = r.bottom + 8;
+  tip.style.left = left + 'px';
+  tip.style.top = top + 'px';
+}
+
+function hideHeatmapTip() {
+  const tip = document.getElementById('hmTip');
+  if (tip) tip.classList.remove('show');
+}
+
+function wireHeatmapTip(el) {
+  if (el.dataset.tipWired) return;
+  el.dataset.tipWired = '1';
+  el.addEventListener('mouseover', (e) => {
+    const cell = e.target.closest('.hm-cell');
+    if (cell && cell.dataset.day) showHeatmapTip(cell);
+  });
+  el.addEventListener('mouseleave', hideHeatmapTip);
+  const scroll = document.getElementById('heatmapScroll');
+  if (scroll) scroll.addEventListener('scroll', hideHeatmapTip);
 }
 
 function renderCharts(s) {
