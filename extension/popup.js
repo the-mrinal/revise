@@ -324,67 +324,36 @@ function checkActiveTimer() {
 }
 
 // --- Start Timer ---
-document.getElementById("startTimerBtn").addEventListener("click", async () => {
+// The background service worker owns the POST + timer write so the
+// transaction completes even if the popup is closed mid-flight (Chrome
+// destroys the popup as soon as it loses focus).
+document.getElementById("startTimerBtn").addEventListener("click", () => {
   const btn = document.getElementById("startTimerBtn");
   btn.disabled = true;
   btn.textContent = "Starting...";
 
-  const url = document.getElementById("url").value;
-  const title = document.getElementById("title").value || null;
-  const questionType = document.getElementById("questionType").value;
-
   const payload = {
-    url,
-    title,
-    difficulty: null,
-    time_taken: null,
-    notes: null,
-    question_type: questionType,
+    url: document.getElementById("url").value,
+    title: document.getElementById("title").value || null,
+    questionType: document.getElementById("questionType").value,
   };
 
-  try {
-    const r = await apiFetch("/questions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (r.ok) {
-      const question = await r.json();
-
-      const timerState = {
-        questionId: question.id,
-        // Cancel needs to know whether to delete the row (fresh) or just
-        // roll back the attempt bump (already tracked).
-        wasExisting: !!question.was_existing,
-        url: url,
-        title: title || url,
-        questionType: questionType,
-        startTime: Date.now(),
-        accumulated: 0,
-        running: true,
-      };
-      chrome.storage.local.set({ timer: timerState });
-
+  chrome.runtime.sendMessage({ action: "startTimer", payload }, async (resp) => {
+    if (chrome.runtime.lastError || !resp) {
+      showToast("Failed to start timer", "error");
+    } else if (resp.ok) {
       showToast("Timer started!", "success");
       checkActiveTimer();
     } else {
-      let msg = "Server error (" + r.status + ")";
-      try {
-        const err = await r.json();
-        msg =
-          typeof err.detail === "string"
-            ? err.detail
-            : JSON.stringify(err.detail);
-      } catch {}
-      showToast(msg, "error");
+      if (resp.authExpired) {
+        await clearAuth();
+        showLoginView();
+      }
+      showToast(resp.error || "Failed to start timer", "error");
     }
-  } catch (e) {
-    showToast("Cannot reach server: " + e.message, "error");
-  }
-
-  btn.disabled = false;
-  btn.textContent = "Start Timer";
+    btn.disabled = false;
+    btn.textContent = "Start Timer";
+  });
 });
 
 // --- Toggle pause/resume ---
