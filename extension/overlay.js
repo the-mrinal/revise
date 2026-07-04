@@ -90,8 +90,17 @@
         all: initial;
         display: block !important;
         position: fixed !important;
-        bottom: 20px !important;
-        right: 20px !important;
+        /* Offsets go through custom properties: !important declarations in a
+           shadow stylesheet beat !important inline styles on the host, so
+           inline "right: auto" could never override a literal "right: 20px"
+           here and the box would stretch to all four pinned edges when a drag
+           sets left/top. Custom properties are set inline as normal
+           declarations, while the physical properties keep their !important
+           armor against site CSS. */
+        left: var(--revise-widget-left, auto) !important;
+        top: var(--revise-widget-top, auto) !important;
+        right: var(--revise-widget-right, 20px) !important;
+        bottom: var(--revise-widget-bottom, 20px) !important;
         z-index: 2147483646 !important;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         visibility: visible !important;
@@ -231,19 +240,19 @@
     } catch { /* extension context invalidated */ }
   }
 
-  // Position is stored as viewport px and applied as inline !important styles,
-  // which beat the stylesheet's bottom/right defaults. Clamp on every apply
-  // (not just on save) so a position saved on a bigger window can't strand
-  // the widget off-screen.
+  // Position is stored as viewport px and applied via the --revise-widget-*
+  // custom properties the :host rule reads. Clamp on every apply (not just on
+  // save) so a position saved on a bigger window can't strand the widget
+  // off-screen.
   function applyWidgetPos(pos) {
     if (!widgetHost || !pos || typeof pos.left !== "number" || typeof pos.top !== "number") return;
     const r = widgetHost.getBoundingClientRect();
     const left = Math.min(Math.max(0, pos.left), window.innerWidth - (r.width || 160));
     const top = Math.min(Math.max(0, pos.top), window.innerHeight - (r.height || 48));
-    widgetHost.style.setProperty("left", left + "px", "important");
-    widgetHost.style.setProperty("top", top + "px", "important");
-    widgetHost.style.setProperty("right", "auto", "important");
-    widgetHost.style.setProperty("bottom", "auto", "important");
+    widgetHost.style.setProperty("--revise-widget-left", left + "px");
+    widgetHost.style.setProperty("--revise-widget-top", top + "px");
+    widgetHost.style.setProperty("--revise-widget-right", "auto");
+    widgetHost.style.setProperty("--revise-widget-bottom", "auto");
   }
 
   function initWidgetDrag(widgetEl) {
