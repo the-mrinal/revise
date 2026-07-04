@@ -578,7 +578,8 @@ def activity_today(user_id: str = Depends(get_current_user_id)):
 
 @app.get("/api/activity/heatmap")
 def activity_heatmap(user_id: str = Depends(get_current_user_id)):
-    """Daily activity counts (UTC days) for the last ~53 weeks: {date: count}."""
+    """Per-day activity detail for the last ~53 weeks, in the user's timezone:
+    {date: {total, new, revised, difficulty: {easy/medium/hard/unknown: n}}}."""
     return get_activity_heatmap(user_id)
 
 

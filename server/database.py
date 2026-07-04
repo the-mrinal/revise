@@ -398,24 +398,54 @@ def _compute_streaks(activity_dates: set[str], today: date | None = None) -> tup
     return current_streak, longest_streak
 
 
-def get_activity_heatmap(user_id: str, days: int = 371) -> dict[str, int]:
-    """Daily activity counts (solves + revisions) for the last ~53 weeks,
-    bucketed into the user's profile timezone.
+def _aggregate_heatmap_days(
+    pairs: set[tuple[int, str]],
+    first_day: dict[int, str],
+    difficulty_by_qid: dict[int, str | None],
+) -> dict[str, dict]:
+    """Distinct (question, local-day) pairs -> per-day detail:
+
+        {"YYYY-MM-DD": {"total": 3, "new": 1, "revised": 2,
+                        "difficulty": {"easy": 1, "medium": 2}}}
+
+    A question counts as new on its first-ever solve day and revised on any
+    later day. Questions with no difficulty set land in the "unknown" bucket;
+    only nonzero buckets are emitted. Pure so the bucketing rules are testable
+    without a database.
+    """
+    out: dict[str, dict] = {}
+    for qid, day in pairs:
+        entry = out.setdefault(day, {"total": 0, "new": 0, "revised": 0, "difficulty": {}})
+        entry["total"] += 1
+        # An unknown first day means the question's origin predates the event
+        # log and its row is gone (deleted); its earliest sighting acts as new.
+        entry["new" if first_day.get(qid, day) == day else "revised"] += 1
+        diff = difficulty_by_qid.get(qid) or "unknown"
+        entry["difficulty"][diff] = entry["difficulty"].get(diff, 0) + 1
+    return out
+
+
+def get_activity_heatmap(user_id: str, days: int = 371) -> dict[str, dict]:
+    """Per-day activity detail for the last ~53 weeks, bucketed into the
+    user's profile timezone. Each day counts the distinct questions touched,
+    split into new solves vs revisions and by difficulty (see
+    _aggregate_heatmap_days for the shape).
 
     'attempted' events are excluded — they're timer-start artifacts and would
     double-count against the 'created'/'reviewed' rows written on finish.
     """
     tz_name = get_user_timezone(user_id)
+    zone = _safe_zone(tz_name)
     client = get_client()
     # One extra day of slack so a UTC cutoff can't clip events that fall
     # inside the window once shifted into a UTC+N zone.
     cutoff = (date.today() - timedelta(days=days + 1)).isoformat()
-    timestamps: list[str] = []
+    pairs: set[tuple[int, str]] = set()  # distinct (question_id, local day)
     start, page = 0, 1000  # PostgREST silently truncates at 1000 rows/request
     while True:
         rows = (
             client.table("question_events")
-            .select("created_at")
+            .select("question_id, created_at")
             .eq("user_id", user_id)
             .in_("event_type", ["created", "reviewed"])
             .gte("created_at", cutoff)
@@ -423,11 +453,56 @@ def get_activity_heatmap(user_id: str, days: int = 371) -> dict[str, int]:
             .range(start, start + page - 1)
             .execute()
         ).data
-        timestamps.extend(r.get("created_at") for r in rows)
+        for r in rows:
+            day = _to_local_day(r.get("created_at"), zone)
+            if day and r.get("question_id") is not None:
+                pairs.add((r["question_id"], day))
         if len(rows) < page:
             break
         start += page
-    return _bucket_event_days(timestamps, tz_name)
+    if not pairs:
+        return {}
+
+    # First-ever solve day and difficulty per involved question. The 'created'
+    # event is written once at first solve and may predate the window, so it's
+    # fetched by question id, not by date; rows older than the event log fall
+    # back to solved_at. Chunked so the id list stays within URL limits.
+    qids = sorted({qid for qid, _ in pairs})
+    first_day: dict[int, str] = {}
+    difficulty_by_qid: dict[int, str | None] = {}
+    solved_at_by_qid: dict[int, str | None] = {}
+    for i in range(0, len(qids), 150):
+        chunk = qids[i : i + 150]
+        created = (
+            client.table("question_events")
+            .select("question_id, created_at")
+            .eq("user_id", user_id)
+            .eq("event_type", "created")
+            .in_("question_id", chunk)
+            .execute()
+        ).data
+        for r in created:
+            day = _to_local_day(r.get("created_at"), zone)
+            qid = r["question_id"]
+            if day and (qid not in first_day or day < first_day[qid]):
+                first_day[qid] = day
+        qrows = (
+            client.table("questions")
+            .select("id, difficulty, solved_at")
+            .eq("user_id", user_id)
+            .in_("id", chunk)
+            .execute()
+        ).data
+        for r in qrows:
+            difficulty_by_qid[r["id"]] = r.get("difficulty")
+            solved_at_by_qid[r["id"]] = r.get("solved_at")
+    for qid in qids:
+        if qid not in first_day:
+            day = _to_local_day(solved_at_by_qid.get(qid), zone)
+            if day:
+                first_day[qid] = day
+
+    return _aggregate_heatmap_days(pairs, first_day, difficulty_by_qid)
 
 
 def find_by_url(user_id: str, url: str) -> dict | None:
