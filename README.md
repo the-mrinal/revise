@@ -7,6 +7,7 @@
 Track everything you study — coding problems, math exercises, design tutorials, language lessons, and more. The SM-2 algorithm tells you exactly when to revise, so knowledge sticks for good.
 
 [![Live Demo](https://img.shields.io/badge/Live-revise.mrinal.dev-6366f1?style=for-the-badge&logo=vercel&logoColor=white)](https://revise.mrinal.dev)
+[![CI](https://img.shields.io/github/actions/workflow/status/the-mrinal/revise/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/the-mrinal/revise/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-FastAPI-3b82f6?style=for-the-badge&logo=python&logoColor=white)](https://fastapi.tiangolo.com)
 [![Supabase](https://img.shields.io/badge/Supabase-Postgres-3ecf8e?style=for-the-badge&logo=supabase&logoColor=white)](https://supabase.com)
@@ -130,7 +131,7 @@ Any other URL works too — it's tagged as "other". You can add custom platforms
 
 ### Install the Chrome Extension
 
-1. Download [`extension.zip`](https://github.com/the-mrinal/code-revision-tracker/raw/main/extension.zip)
+1. Download [`extension.zip`](https://github.com/the-mrinal/revise/releases/latest/download/extension.zip) from the latest release
 2. Unzip the downloaded file
 3. Open `chrome://extensions` in Chrome
 4. Enable **Developer mode** (top right toggle)
@@ -264,6 +265,10 @@ The server starts at `http://localhost:8765`. The landing page is at `/` and the
 
 Update the `SERVER_URL` in the extension's config to point to your self-hosted instance.
 
+#### Deploying updates
+
+The hosted instance is deployed from the **Deploy** workflow in the Actions tab (Run workflow → `main`). It pulls the latest code on the server, rebuilds the container, and verifies the site is up. Database migrations in `server/migrations/` are applied manually against Supabase.
+
 ## API Endpoints
 
 All endpoints except auth require an `Authorization: Bearer <token>` header.
@@ -298,6 +303,10 @@ The revision schedule uses the [SM-2 algorithm](https://en.wikipedia.org/wiki/Su
 
 The easiness factor adjusts over time. Things you consistently nail appear less frequently. Things you struggle with keep coming back until they stick.
 
+## DSA Pattern Study Guides
+
+The repo includes [15 in-depth study guides](thoughts/shared/research/) covering the classic DSA patterns — arrays/matrices, two pointers, sliding window, stacks, linked lists, trees, graphs, backtracking, dynamic programming, greedy, binary search, heaps, and more — each with worked problem analyses and step-by-step SVG diagrams. They're also served on the hosted instance at [revise.mrinal.dev/research](https://revise.mrinal.dev/research).
+
 ## Tech Stack
 
 - **Backend**: Python, FastAPI
@@ -309,7 +318,7 @@ The easiness factor adjusts over time. Things you consistently nail appear less 
 
 ## Contributing
 
-Contributions welcome! Open an issue or submit a PR.
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, testing, and PR guidelines. Good entry points: [platform support requests](https://github.com/the-mrinal/revise/issues?q=is%3Aissue+label%3Aplatform-support) and issues labeled [`good first issue`](https://github.com/the-mrinal/revise/issues?q=is%3Aissue+label%3A%22good+first+issue%22).
 
 ## License
 

@@ -4,10 +4,15 @@ __pycache__/
 *.pyo
 .env
 venv/
+.venv/
+.pytest_cache/
 
 # Database
 *.db
 data/
+
+# Build artifacts (built in CI and attached to releases)
+extension.zip
 
 # macOS
 .DS_Store
