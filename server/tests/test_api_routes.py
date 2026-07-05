@@ -24,7 +24,7 @@ def test_heatmap_requires_auth():
 
     with TestClient(main_module.app) as anon:
         r = anon.get("/api/activity/heatmap")
-    assert r.status_code == 403  # HTTPBearer rejects the missing header
+    assert r.status_code == 401  # HTTPBearer rejects the missing header (401 since FastAPI 0.116)
 
 
 # --- POST /api/questions/{qid}/cancel-attempt ---
