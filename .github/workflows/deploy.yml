@@ -45,12 +45,15 @@ jobs:
           echo "$STATUS" | grep -q "Up" || { echo "::error::revise-server container is not Up"; exit 1; }
 
       - name: Verify site is live
-        # GET, not HEAD — the root route is GET-only, so HEAD returns 405 even when healthy
+        # Check the origin on the VPS itself — the public domain sits behind
+        # Cloudflare, which 403s requests from GitHub runner IPs.
+        # GET, not HEAD — the root route is GET-only, so HEAD returns 405 even when healthy.
         run: |
           sleep 5
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" https://revise.mrinal.dev --connect-timeout 10)
-          echo "HTTP $CODE"
-          [ "$CODE" = "200" ] || { echo "::error::Site returned HTTP $CODE"; exit 1; }
+          CODE=$(ssh -i ~/.ssh/deploy_key "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "curl -s -o /dev/null -w '%{http_code}' http://localhost:8765 --connect-timeout 10")
+          echo "origin HTTP $CODE"
+          [ "$CODE" = "200" ] || { echo "::error::Origin returned HTTP $CODE"; exit 1; }
 
       - name: Job summary
         if: always()
