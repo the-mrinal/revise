@@ -1,0 +1,25 @@
+name: Platform support request
+description: Request auto-detection for a new learning platform
+labels: [platform-support]
+body:
+  - type: input
+    id: platform
+    attributes:
+      label: Platform name
+      placeholder: Exercism
+    validations:
+      required: true
+  - type: input
+    id: url-pattern
+    attributes:
+      label: Example problem URL
+      placeholder: https://exercism.org/tracks/python/exercises/two-fer
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything special about how problems/titles appear on this site?
+      description: |
+        Note you can already add any site yourself via dashboard settings → Custom Platforms.
+        Built-in support means better title detection out of the box for everyone.

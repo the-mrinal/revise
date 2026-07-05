@@ -65,7 +65,6 @@ from database import (
 from patterns import (
     PATTERNS,
     PROBLEM_SLUGS,
-    PROBLEM_TO_PATTERN,
     extract_leetcode_number,
     get_all_pattern_labels,
     get_pattern_for_url,

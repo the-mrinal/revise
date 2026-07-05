@@ -1,0 +1,70 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ vars.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Pull latest code and rebuild
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" bash -s <<'EOF'
+          set -euo pipefail
+          cd ~/github-personal/revise
+          OLD=$(git rev-parse HEAD)
+          git pull
+          NEW=$(git rev-parse HEAD)
+          echo "OLD_REV=$OLD"
+          echo "NEW_REV=$NEW"
+          echo "--- commits pulled ---"
+          git log --oneline "$OLD..$NEW" || true
+          echo "--- migration check ---"
+          git diff --name-only "$OLD" "$NEW" -- server/migrations 'server/backfill_*.py' > /tmp/migration_changes.txt || true
+          cat /tmp/migration_changes.txt
+          docker compose up -d --build
+          EOF
+
+      - name: Verify container is running
+        run: |
+          STATUS=$(ssh -i ~/.ssh/deploy_key "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "docker ps --filter name=revise-server --format '{{.Names}}\t{{.Status}}'")
+          echo "$STATUS"
+          echo "$STATUS" | grep -q "Up" || { echo "::error::revise-server container is not Up"; exit 1; }
+
+      - name: Verify site is live
+        # GET, not HEAD — the root route is GET-only, so HEAD returns 405 even when healthy
+        run: |
+          sleep 5
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" https://revise.mrinal.dev --connect-timeout 10)
+          echo "HTTP $CODE"
+          [ "$CODE" = "200" ] || { echo "::error::Site returned HTTP $CODE"; exit 1; }
+
+      - name: Job summary
+        if: always()
+        run: |
+          MIGRATIONS=$(ssh -i ~/.ssh/deploy_key "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "cat /tmp/migration_changes.txt 2>/dev/null" || true)
+          {
+            echo "## Deploy summary"
+            if [ -n "$MIGRATIONS" ]; then
+              echo "### :warning: Migration or backfill files changed — apply them manually against Supabase!"
+              echo '```'
+              echo "$MIGRATIONS"
+              echo '```'
+            else
+              echo "No migration changes pulled."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

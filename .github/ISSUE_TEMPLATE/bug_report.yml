@@ -1,0 +1,51 @@
+name: Bug report
+description: Something isn't working in the extension, dashboard, or server
+labels: [bug]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Browser extension
+        - Web dashboard
+        - Server / API
+        - Self-hosting / Docker
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Opened the extension on a LeetCode problem
+        2. Started the timer, then ...
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: Page URL (if extension-related)
+      placeholder: https://leetcode.com/problems/two-sum/
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Chrome 138, Safari 18, ...
+  - type: dropdown
+    id: instance
+    attributes:
+      label: Instance
+      options:
+        - Hosted (revise.mrinal.dev)
+        - Self-hosted
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console errors or logs
+      description: Open DevTools (extension popup → right click → Inspect) and paste anything relevant.
+      render: shell
