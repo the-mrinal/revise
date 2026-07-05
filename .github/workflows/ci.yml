@@ -47,7 +47,7 @@ jobs:
       - name: Build extension.zip
         working-directory: extension
         run: zip -r ../extension.zip . -x "*.DS_Store"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: extension
           path: extension.zip
