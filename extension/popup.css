@@ -124,6 +124,45 @@ body {
   color: #f4c542;
 }
 
+.source-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.source-toggle .source-btn {
+  flex: 1;
+  padding: 6px 4px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #1a1a1a;
+  color: #888;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.source-toggle .source-btn:hover {
+  border-color: #555;
+}
+
+.source-toggle .source-btn.active[data-source="self"] {
+  background: #1e3128;
+  border-color: #2e7d4f;
+  color: #6ec592;
+}
+
+.source-toggle .source-btn.active[data-source="hint"] {
+  background: #382b1a;
+  border-color: #b3661a;
+  color: #e0a663;
+}
+
+.source-toggle .source-btn.active[data-source="solution"] {
+  background: #3a2323;
+  border-color: #b04343;
+  color: #e08c8c;
+}
+
 .row {
   display: flex;
   gap: 10px;

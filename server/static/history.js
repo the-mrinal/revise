@@ -41,6 +41,9 @@
       .qh-stars { color:#fbbf24; font-size:12px; letter-spacing:1px; }
       .qh-outcome { font-size:12px; color:var(--muted,#9aa0aa); margin-top:2px; }
       .qh-recon { font-size:10px; color:var(--muted,#9aa0aa); opacity:.7; font-style:italic; }
+      .qh-source { font-size:10px; padding:1px 6px; border-radius:8px; margin-left:4px; vertical-align:1px; }
+      .qh-source-hint { color:#b3661a; background:rgba(179,102,26,.12); }
+      .qh-source-solution { color:#b04343; background:rgba(176,67,67,.12); }
       .qh-empty { font-size:13px; color:var(--muted,#9aa0aa); padding:8px 0; }
     `;
     var el = document.createElement("style");
@@ -124,16 +127,21 @@
       return String(b.created_at || "").localeCompare(String(a.created_at || ""));
     });
 
+    var SOURCE_BADGES = { hint: "used hint", solution: "saw solution" };
+
     var rows = events.map(function (ev) {
       var isNew = ev.event_type === "created";
       var s = stars(ev.self_rating);
       var oc = outcome(ev);
       var time = ev.time_taken ? " · " + ev.time_taken + "m" : "";
+      var srcBadge = SOURCE_BADGES[ev.solution_source]
+        ? ' <span class="qh-source qh-source-' + ev.solution_source + '">' + SOURCE_BADGES[ev.solution_source] + "</span>"
+        : "";
       return (
         '<li class="qh-ev' + (isNew ? " qh-ev-new" : "") + '">' +
         '<div class="qh-date">' + escHtml(fmtDate(ev.created_at)) + "</div>" +
         '<div class="qh-label">' + escHtml(LABELS[ev.event_type] || ev.event_type) +
-        (ev.reconstructed ? ' <span class="qh-recon">(reconstructed)</span>' : "") + "</div>" +
+        (ev.reconstructed ? ' <span class="qh-recon">(reconstructed)</span>' : "") + srcBadge + "</div>" +
         (s ? '<div class="qh-stars">' + s + escHtml(time) + "</div>" : (time ? '<div class="qh-outcome">' + escHtml(time.replace(" · ", "")) + "</div>" : "")) +
         (oc ? '<div class="qh-outcome">' + escHtml(oc) + "</div>" : "") +
         "</li>"

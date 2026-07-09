@@ -1,6 +1,7 @@
 const API = "https://revise.mrinal.dev/api";
 
 let selectedRating = 0;
+let selectedSource = "self";
 let timerInterval = null;
 let finishTimerData = null;
 
@@ -174,6 +175,17 @@ document.querySelectorAll("#stars .star").forEach((btn) => {
     });
     document.getElementById("finishBtn").disabled = selectedRating === 0;
   });
+});
+
+// --- Solution source toggle ---
+function setSelectedSource(source) {
+  selectedSource = source;
+  document.querySelectorAll("#sourceToggle .source-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.source === source);
+  });
+}
+document.querySelectorAll("#sourceToggle .source-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setSelectedSource(btn.dataset.source));
 });
 
 // --- Populate pattern dropdown ---
@@ -422,6 +434,7 @@ function showFinishForm() {
     document.querySelectorAll("#stars .star").forEach((s) =>
       s.classList.remove("active")
     );
+    setSelectedSource("self");
     document.getElementById("finishBtn").disabled = true;
 
     // Pre-fill from existing question data if available
@@ -451,6 +464,7 @@ document.getElementById("finishBtn").addEventListener("click", async () => {
     notes: document.getElementById("notes").value || null,
     pattern: document.getElementById("patternSelect").value || null,
     question_type: finishTimerData.questionType || "dsa",
+    solution_source: selectedSource,
   };
 
   try {
@@ -460,7 +474,7 @@ document.getElementById("finishBtn").addEventListener("click", async () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ self_rating: selectedRating }),
+        body: JSON.stringify({ self_rating: selectedRating, solution_source: selectedSource }),
       }
     );
 
@@ -506,6 +520,7 @@ document.getElementById("finishBtn").addEventListener("click", async () => {
       document.querySelectorAll("#stars .star").forEach((s) =>
         s.classList.remove("active")
       );
+      setSelectedSource("self");
       document.getElementById("difficulty").value = "";
       document.getElementById("notes").value = "";
       document.getElementById("patternSelect").value = "";
