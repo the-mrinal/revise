@@ -14,7 +14,7 @@ Learning/relearning steps are disabled (day granularity) and fuzzing is
 off so previews and tests are deterministic.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from fsrs import Card, Rating, Scheduler, State
 

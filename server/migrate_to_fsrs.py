@@ -11,7 +11,7 @@ Usage: python migrate_to_fsrs.py            (needs SUPABASE_* env vars)
 Safe to re-run: questions that already have stability are skipped.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fsrs import Card, Rating, State
 
