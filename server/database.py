@@ -29,19 +29,22 @@ COLUMNS = (
     "id, user_id, url, title, platform, difficulty, self_rating, time_taken, "
     "notes, solved_at, easiness_factor, interval, repetitions, next_review, "
     "last_reviewed, attempts, pattern, question_type, "
-    "approach, mistakes, time_complexity, space_complexity"
+    "approach, mistakes, time_complexity, space_complexity, "
+    "stability, fsrs_difficulty, fsrs_state, solution_source"
 )
 
 
 EVENT_COLUMNS = (
     "id, question_id, event_type, self_rating, time_taken, interval, "
-    "repetitions, easiness_factor, next_review, reconstructed, created_at"
+    "repetitions, easiness_factor, next_review, reconstructed, created_at, "
+    "solution_source, stability, fsrs_difficulty, fsrs_state"
 )
 
 # Fields an event may carry beyond the always-present user/question/type.
 _EVENT_FIELDS = (
     "self_rating", "time_taken", "interval", "repetitions",
     "easiness_factor", "next_review", "reconstructed", "created_at",
+    "solution_source", "stability", "fsrs_difficulty", "fsrs_state",
 )
 
 
@@ -102,14 +105,28 @@ def get_question(user_id: str, qid: int) -> dict | None:
     return result.data[0] if result.data else None
 
 
-def update_question_sm2(user_id: str, qid: int, data: dict, set_reviewed: bool = False):
+def update_question_schedule(
+    user_id: str,
+    qid: int,
+    data: dict,
+    set_reviewed: bool = False,
+    solution_source: str | None = None,
+):
+    """Write the FSRS schedule fields computed by scheduler.py.
+
+    interval is still written (derived days) for event rows and the history
+    UI; easiness_factor/repetitions stay frozen at their pre-FSRS values.
+    """
     client = get_client()
     update_data = {
-        "easiness_factor": data["easiness_factor"],
+        "stability": data["stability"],
+        "fsrs_difficulty": data["fsrs_difficulty"],
+        "fsrs_state": data["fsrs_state"],
         "interval": data["interval"],
-        "repetitions": data["repetitions"],
         "next_review": data["next_review"],
     }
+    if solution_source:
+        update_data["solution_source"] = solution_source
     if set_reviewed:
         update_data["last_reviewed"] = datetime.utcnow().isoformat()
     (
@@ -573,8 +590,8 @@ def _merge_url_group(client, url: str, rows: list[dict]):
     """Merge a group of duplicate rows sharing the same normalized URL."""
     if len(rows) < 2:
         return
-    # Keep the row with highest repetitions
-    rows.sort(key=lambda r: (r.get("repetitions") or 0, r.get("solved_at") or ""), reverse=True)
+    # Keep the most-worked row (repetitions froze when FSRS replaced SM-2)
+    rows.sort(key=lambda r: (r.get("attempts") or 0, r.get("solved_at") or ""), reverse=True)
     keep = rows[0]
     others = rows[1:]
 
@@ -620,27 +637,49 @@ def merge_duplicates_for_question(user_id: str, qid: int) -> int | None:
         return qid
     client = get_client()
     _merge_url_group(client, norm_url, dupes)
-    # Return the surviving ID (highest repetitions)
-    dupes.sort(key=lambda r: (r.get("repetitions") or 0, r.get("solved_at") or ""), reverse=True)
+    # Return the surviving ID (most attempts, same key as _merge_url_group)
+    dupes.sort(key=lambda r: (r.get("attempts") or 0, r.get("solved_at") or ""), reverse=True)
     return dupes[0]["id"]
 
 
 DEFAULT_REVISION_QUEUE_SIZE = 20
+DEFAULT_DESIRED_RETENTION = 0.9
+
+_SETTINGS_DEFAULTS = {
+    "revision_queue_size": DEFAULT_REVISION_QUEUE_SIZE,
+    "desired_retention": DEFAULT_DESIRED_RETENTION,
+    "fsrs_params": None,
+}
 
 
 def get_user_settings(user_id: str) -> dict:
     """Return the user's settings, falling back to defaults if none are stored."""
     client = get_client()
-    result = (
-        client.table("user_settings")
-        .select("revision_queue_size")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
+    try:
+        result = (
+            client.table("user_settings")
+            .select("revision_queue_size, desired_retention, fsrs_params")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        # Pre-009 database: FSRS settings columns don't exist yet.
+        result = (
+            client.table("user_settings")
+            .select("revision_queue_size")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
     if result.data:
-        return result.data[0]
-    return {"revision_queue_size": DEFAULT_REVISION_QUEUE_SIZE}
+        stored = result.data[0]
+        return {
+            "revision_queue_size": stored.get("revision_queue_size", DEFAULT_REVISION_QUEUE_SIZE),
+            "desired_retention": stored.get("desired_retention") or DEFAULT_DESIRED_RETENTION,
+            "fsrs_params": stored.get("fsrs_params"),
+        }
+    return dict(_SETTINGS_DEFAULTS)
 
 
 def upsert_user_settings(user_id: str, data: dict) -> dict:
@@ -653,7 +692,11 @@ def upsert_user_settings(user_id: str, data: dict) -> dict:
         .execute()
     )
     stored = result.data[0] if result.data else row
-    return {"revision_queue_size": stored.get("revision_queue_size")}
+    return {
+        "revision_queue_size": stored.get("revision_queue_size"),
+        "desired_retention": stored.get("desired_retention", DEFAULT_DESIRED_RETENTION),
+        "fsrs_params": stored.get("fsrs_params"),
+    }
 
 
 def get_user_platforms(user_id: str) -> list[dict]:

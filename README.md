@@ -4,7 +4,7 @@
 
 **Never forget what you learn.**
 
-Track everything you study — coding problems, math exercises, design tutorials, language lessons, and more. The SM-2 algorithm tells you exactly when to revise, so knowledge sticks for good.
+Track everything you study — coding problems, math exercises, design tutorials, language lessons, and more. FSRS — the modern spaced-repetition algorithm behind Anki — tells you exactly when to revise, so knowledge sticks for good.
 
 [![Live Demo](https://img.shields.io/badge/Live-revise.mrinal.dev-6366f1?style=for-the-badge&logo=vercel&logoColor=white)](https://revise.mrinal.dev)
 [![CI](https://img.shields.io/github/actions/workflow/status/the-mrinal/revise/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/the-mrinal/revise/actions/workflows/ci.yml)
@@ -26,7 +26,7 @@ Revise is a browser extension + web dashboard that:
 - **Auto-detects** the platform you're using (LeetCode, Codeforces, HackerRank, Khan Academy, etc.)
 - **Lets you add custom platforms** — track any website you learn from
 - **Times your study** with a built-in timer — no manual entry
-- **Schedules revisions** using the SM-2 spaced repetition algorithm (same algorithm behind Anki and SuperMemo)
+- **Schedules revisions** using FSRS, the modern spaced repetition algorithm behind Anki
 - **Shows a dashboard** with stats, charts, activity feed, and a filterable table of everything you've tracked
 
 No passwords. Sign in with a magic link. Your data is yours.
@@ -65,7 +65,7 @@ No passwords. Sign in with a magic link. Your data is yours.
   <img src="docs/images/extension-save.png" width="280" alt="Extension - Save Question" />
 </p>
 
-> Start a timer when you begin studying. When you're done, rate your recall (1-5 stars), add notes, and save. The SM-2 algorithm handles the rest.
+> Start a timer when you begin studying. When you're done, rate your recall (1-5 stars), say how you solved it (yourself, with a hint, or from the solution), add notes, and save. FSRS handles the rest.
 
 ## How It Works
 
@@ -84,7 +84,7 @@ Browser Extension (Chrome / Safari)
 2. **Click the extension** — it auto-detects the URL and title
 3. **Start the timer**, study, stop when done
 4. **Rate your recall** (1-5 stars) and save
-5. **SM-2 schedules your next review** — things you found hard come back sooner, easy ones later
+5. **FSRS schedules your next review** — things you found hard come back sooner, easy ones later. Peeking at the solution brings an item back quickly, no matter the rating
 6. **Check the dashboard** for what's due today, your stats, and your full history
 
 ## Supported Platforms
@@ -107,7 +107,8 @@ Any other URL works too — it's tagged as "other". You can add custom platforms
 
 ## Features
 
-- **SM-2 Spaced Repetition** — the same algorithm behind Anki and SuperMemo. Rate your recall 1-5 stars, and the system schedules your next review at the optimal time.
+- **FSRS Spaced Repetition** — the same algorithm behind modern Anki. Rate your recall 1-5 stars, and it models your memory to schedule the next review at the optimal time, tunable via a per-user target retention (70–99%).
+- **Honest Check-ins** — record how you solved each item: by yourself, with a hint, or from the solution. Assisted recalls earn shorter intervals so the schedule reflects what you actually know.
 - **Built-in Timer** — start when you begin studying, pause/resume, stop when done. Time is recorded automatically.
 - **Custom Platforms** — add any website from the dashboard settings. Define a name and URL pattern, and it auto-detects just like the built-in platforms.
 - **Analytics Dashboard** — items tracked, difficulty breakdown, platform distribution, revision schedule, daily activity feed.
@@ -158,12 +159,24 @@ create table public.questions (
   time_taken integer,
   notes text,
   solved_at timestamptz default now(),
-  easiness_factor double precision default 2.5,
+  easiness_factor double precision default 2.5,  -- legacy SM-2 (kept for rollback)
   interval integer default 1,
-  repetitions integer default 0,
+  repetitions integer default 0,                 -- legacy SM-2 (kept for rollback)
   next_review date,
   last_reviewed timestamptz,
-  attempts integer default 1
+  attempts integer default 1,
+  -- study metadata
+  pattern text,
+  question_type text default 'dsa',
+  approach text,
+  mistakes text,
+  time_complexity text,
+  space_complexity text,
+  -- FSRS memory state + solution source (migration 009)
+  stability double precision,
+  fsrs_difficulty double precision,
+  fsrs_state smallint,
+  solution_source text check (solution_source in ('self', 'hint', 'solution'))
 );
 
 alter table public.questions enable row level security;
@@ -203,12 +216,17 @@ create table public.question_events (
   event_type      text not null,            -- 'created' | 'reviewed' | 'attempted'
   self_rating     integer,
   time_taken      integer,
-  interval        integer,                  -- SM-2 snapshot AFTER this event
-  repetitions     integer,
-  easiness_factor double precision,
+  interval        integer,                  -- schedule snapshot AFTER this event
+  repetitions     integer,                  -- legacy SM-2 (frozen post-FSRS)
+  easiness_factor double precision,         -- legacy SM-2 (frozen post-FSRS)
   next_review     date,
   reconstructed   boolean default false,    -- true for backfilled rows (approximate)
-  created_at      timestamptz default now()
+  created_at      timestamptz default now(),
+  -- FSRS snapshot + solution source (migration 009)
+  solution_source text check (solution_source in ('self', 'hint', 'solution')),
+  stability       double precision,
+  fsrs_difficulty double precision,
+  fsrs_state      smallint
 );
 
 alter table public.question_events enable row level security;
@@ -224,7 +242,11 @@ create index idx_qevents_question on public.question_events(user_id, question_id
 create table public.user_settings (
   user_id              uuid primary key references auth.users(id) on delete cascade,
   revision_queue_size  integer not null default 20,  -- 0 = unlimited
-  updated_at           timestamptz default now()
+  updated_at           timestamptz default now(),
+  -- FSRS (migration 009)
+  desired_retention    double precision not null default 0.9
+    check (desired_retention between 0.70 and 0.99),
+  fsrs_params          jsonb                          -- per-user optimized parameters (null = defaults)
 );
 
 alter table public.user_settings enable row level security;
@@ -282,7 +304,7 @@ All endpoints except auth require an `Authorization: Bearer <token>` header.
 | `GET` | `/api/questions` | List all items |
 | `PUT` | `/api/questions/{id}` | Edit an item |
 | `DELETE` | `/api/questions/{id}` | Delete an item |
-| `POST` | `/api/questions/{id}/review` | Submit a review rating (triggers SM-2) |
+| `POST` | `/api/questions/{id}/review` | Submit a review rating + solution source (triggers FSRS) |
 | `GET` | `/api/revisions/today` | Get items due for revision today |
 | `GET` | `/api/activity/today` | Today's new + revised items |
 | `GET` | `/api/stats` | Summary statistics |
@@ -290,18 +312,22 @@ All endpoints except auth require an `Authorization: Bearer <token>` header.
 | `POST` | `/api/platforms` | Add a custom platform |
 | `DELETE` | `/api/platforms/{id}` | Delete a custom platform |
 
-## SM-2 Algorithm
+## Scheduling Algorithm (FSRS)
 
-The revision schedule uses the [SM-2 algorithm](https://en.wikipedia.org/wiki/SuperMemo#Description_of_SM-2_algorithm):
+The revision schedule uses [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/ABC-of-FSRS) (Free Spaced Repetition Scheduler, the algorithm modern Anki adopted), via [py-fsrs](https://github.com/open-spaced-repetition/py-fsrs). It models each item's **memory stability** and **difficulty** from your review history and schedules the next review just before you'd forget.
 
-| Rating | Meaning | What happens |
-|--------|---------|--------------|
-| 1-2 | Forgot / struggled | Interval resets — review again soon |
-| 3 | Hard recall | Short interval |
-| 4 | Good recall | Moderate interval |
-| 5 | Easy recall | Long interval |
+Your 1-5 star rating combines with **how you solved it**:
 
-The easiness factor adjusts over time. Things you consistently nail appear less frequently. Things you struggle with keep coming back until they stick.
+| Rating | Solved myself | Used a hint | Saw the solution |
+|--------|--------------|-------------|------------------|
+| 1-2 | Back soon (lapse) | Back soon (lapse) | Back soon (lapse) |
+| 3 | Short interval | Short interval | Back soon (lapse) |
+| 4 | Normal interval | Capped — short | Back soon (lapse) |
+| 5 | Longest interval | Capped — short | Back soon (lapse) |
+
+Reading the answer always brings the item back quickly — solving it yourself is the only way to earn long intervals. A per-user **target retention** setting (default 90%) controls the trade-off between review frequency and forgetting.
+
+Migrating an existing deployment from SM-2: apply `server/migrations/009_fsrs.sql`, deploy, then run `python migrate_to_fsrs.py` once (idempotent) to replay each question's review history through FSRS. Legacy rows also seed themselves lazily on their first post-migration review, so the backfill is a nicety, not a requirement.
 
 ## DSA Pattern Study Guides
 

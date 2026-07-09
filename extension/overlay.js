@@ -588,6 +588,39 @@
         border-color: #5b6abf;
         color: #f4c542;
       }
+      .source-toggle {
+        display: flex;
+        gap: 4px;
+      }
+      .source-toggle .source-btn {
+        flex: 1;
+        padding: 6px 4px;
+        border: 1px solid #333;
+        border-radius: 6px;
+        background: #1a1a1a;
+        color: #888;
+        font-size: 11px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .source-toggle .source-btn:hover {
+        border-color: #555;
+      }
+      .source-toggle .source-btn.active[data-source="self"] {
+        background: #1e3128;
+        border-color: #2e7d4f;
+        color: #6ec592;
+      }
+      .source-toggle .source-btn.active[data-source="hint"] {
+        background: #382b1a;
+        border-color: #b3661a;
+        color: #e0a663;
+      }
+      .source-toggle .source-btn.active[data-source="solution"] {
+        background: #3a2323;
+        border-color: #b04343;
+        color: #e08c8c;
+      }
       .complexity-row {
         display: flex;
         gap: 10px;
@@ -1070,6 +1103,14 @@
         </div>
       </div>
       <div class="field">
+        <label>How did you solve it?</label>
+        <div class="source-toggle" id="revise-source">
+          <button class="source-btn active" data-source="self">Solved myself</button>
+          <button class="source-btn" data-source="hint">Used a hint</button>
+          <button class="source-btn" data-source="solution">Saw solution</button>
+        </div>
+      </div>
+      <div class="field">
         <label>Notes</label>
         <textarea id="revise-notes" placeholder="Key insights, things to remember...">${q.notes || ""}</textarea>
       </div>
@@ -1077,6 +1118,15 @@
     `;
 
     let selectedRating = rating;
+    let selectedSource = "self";
+    shadow.querySelectorAll("#revise-source .source-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectedSource = btn.dataset.source;
+        shadow.querySelectorAll("#revise-source .source-btn").forEach((b) => {
+          b.classList.toggle("active", b.dataset.source === selectedSource);
+        });
+      });
+    });
     const updateFinishBtn = () => {
       const btn = shadow.getElementById("revise-finish");
       if (btn) btn.disabled = selectedRating === 0;
@@ -1094,11 +1144,11 @@
     });
 
     shadow.getElementById("revise-finish").addEventListener("click", () => {
-      saveAndFinish(timer, selectedRating, totalMinutes);
+      saveAndFinish(timer, selectedRating, totalMinutes, selectedSource);
     });
   }
 
-  async function saveAndFinish(timer, selectedRating, totalMinutes) {
+  async function saveAndFinish(timer, selectedRating, totalMinutes, selectedSource = "self") {
     const qid = timer.questionId;
     if (!qid || !selectedRating) return;
     const btn = shadow.getElementById("revise-finish");
@@ -1106,11 +1156,11 @@
     btn.textContent = "Saving...";
 
     try {
-      // Run SM2 review
+      // Run the scheduler review
       const reviewRes = await apiFetch(`/questions/${qid}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ self_rating: selectedRating }),
+        body: JSON.stringify({ self_rating: selectedRating, solution_source: selectedSource }),
       });
 
       if (!reviewRes.ok) {
@@ -1142,6 +1192,7 @@
         mistakes: shadow.getElementById("revise-mistakes").value || null,
         time_complexity: shadow.getElementById("revise-time-complexity").value || null,
         space_complexity: shadow.getElementById("revise-space-complexity").value || null,
+        solution_source: selectedSource,
       };
 
       const updateRes = await apiFetch(`/questions/${targetId}`, {

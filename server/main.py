@@ -3,7 +3,7 @@
 import os
 import re
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
@@ -58,7 +58,7 @@ from database import (
     set_user_admin,
     update_profile,
     update_question,
-    update_question_sm2,
+    update_question_schedule,
     upload_avatar,
     upsert_user_settings,
 )
@@ -69,7 +69,7 @@ from patterns import (
     get_all_pattern_labels,
     get_pattern_for_url,
 )
-from sm2 import sm2
+import scheduler
 
 app = FastAPI(title="Revise")
 
@@ -172,6 +172,8 @@ class QuestionIn(BaseModel):
     time_taken: Optional[int] = None
     notes: Optional[str] = None
     question_type: Optional[str] = "dsa"
+    # Defaults to "self" so extension versions that predate the field keep working.
+    solution_source: Literal["self", "hint", "solution"] = "self"
 
     _normalize_difficulty = field_validator("difficulty", mode="before")(
         classmethod(lambda cls, v: normalize_difficulty(v))
@@ -191,6 +193,7 @@ class QuestionUpdate(BaseModel):
     mistakes: Optional[str] = None
     time_complexity: Optional[str] = None
     space_complexity: Optional[str] = None
+    solution_source: Optional[Literal["self", "hint", "solution"]] = None
 
     _normalize_difficulty = field_validator("difficulty", mode="before")(
         classmethod(lambda cls, v: normalize_difficulty(v))
@@ -199,6 +202,7 @@ class QuestionUpdate(BaseModel):
 
 class ReviewIn(BaseModel):
     self_rating: int = Field(ge=1, le=5)
+    solution_source: Literal["self", "hint", "solution"] = "self"
 
 
 class MagicLinkRequest(BaseModel):
@@ -212,7 +216,9 @@ class PlatformIn(BaseModel):
 
 class SettingsUpdate(BaseModel):
     # 0 = unlimited. Capped to keep a single day's queue sane.
-    revision_queue_size: int = Field(ge=0, le=500)
+    revision_queue_size: Optional[int] = Field(default=None, ge=0, le=500)
+    # FSRS target retention: how much you want to remember at review time.
+    desired_retention: Optional[float] = Field(default=None, ge=0.7, le=0.99)
 
 
 class RefreshRequest(BaseModel):
@@ -444,6 +450,7 @@ def create_question(q: QuestionIn, user_id: str = Depends(get_current_user_id)):
         insert_event(
             user_id, existing["id"], "attempted",
             self_rating=q.self_rating, time_taken=q.time_taken,
+            solution_source=q.solution_source,
         )
         # was_existing lets the extension's Cancel roll back the right way:
         # delete a fresh row, but only undo the attempt bump on an old one.
@@ -451,9 +458,13 @@ def create_question(q: QuestionIn, user_id: str = Depends(get_current_user_id)):
 
     user_plats = get_user_platforms(user_id)
     platform = detect_platform(url, user_plats)
-    # No rating yet on a timer-start capture: schedule with a neutral quality
+    settings = get_user_settings(user_id)
+    # No rating yet on a timer-start capture: schedule with a neutral grade
     # but store self_rating as NULL so stats only reflect real reviews.
-    sm2_result = sm2(q.self_rating or 3, 2.5, 1, 0)
+    schedule = scheduler.initial_schedule(
+        q.self_rating, q.solution_source,
+        desired_retention=settings["desired_retention"], params=settings["fsrs_params"],
+    )
 
     # Auto-detect DSA pattern for LeetCode problems
     pattern_label = get_pattern_for_url(url) if platform == "leetcode" else None
@@ -466,18 +477,21 @@ def create_question(q: QuestionIn, user_id: str = Depends(get_current_user_id)):
         "self_rating": q.self_rating,
         "time_taken": q.time_taken,
         "notes": q.notes,
-        "next_review": sm2_result["next_review"],
+        "next_review": schedule["next_review"],
         "pattern": pattern_label,
         "question_type": q.question_type,
+        "solution_source": q.solution_source,
     }
     question = insert_question(user_id, data)
-    update_question_sm2(user_id, question["id"], sm2_result)
+    update_question_schedule(user_id, question["id"], schedule)
     updated = get_question(user_id, question["id"])
     insert_event(
         user_id, question["id"], "created",
         self_rating=q.self_rating, time_taken=q.time_taken,
-        interval=sm2_result["interval"], repetitions=sm2_result["repetitions"],
-        easiness_factor=sm2_result["easiness_factor"], next_review=sm2_result["next_review"],
+        solution_source=q.solution_source,
+        interval=schedule["interval"], next_review=schedule["next_review"],
+        stability=schedule["stability"], fsrs_difficulty=schedule["fsrs_difficulty"],
+        fsrs_state=schedule["fsrs_state"],
     )
     return {**updated, "was_existing": False}
 
@@ -489,18 +503,29 @@ def list_questions(user_id: str = Depends(get_current_user_id)):
 
 @app.get("/api/revisions/today")
 def revisions_today(user_id: str = Depends(get_current_user_id)):
-    quota = get_user_settings(user_id).get("revision_queue_size")
+    settings = get_user_settings(user_id)
+    quota = settings.get("revision_queue_size")
     today = date.today().isoformat()
     # 0 / unset means no daily cap — surface every due revision.
     if not quota or quota <= 0:
-        return get_revisions_due(user_id, today, limit=None)
-    # Fixed daily quota: only fill the slots not already used by today's
-    # completed revisions, so finishing one shrinks the queue rather than
-    # pulling in a replacement. Once the quota is met, the queue is empty.
-    remaining = quota - count_revisions_done_today(user_id)
-    if remaining <= 0:
-        return []
-    return get_revisions_due(user_id, today, limit=remaining)
+        due = get_revisions_due(user_id, today, limit=None)
+    else:
+        # Fixed daily quota: only fill the slots not already used by today's
+        # completed revisions, so finishing one shrinks the queue rather than
+        # pulling in a replacement. Once the quota is met, the queue is empty.
+        remaining = quota - count_revisions_done_today(user_id)
+        if remaining <= 0:
+            return []
+        due = get_revisions_due(user_id, today, limit=remaining)
+    # Attach the 15 source x rating outcomes so the dashboard can show
+    # "if I pick this, when does it come back" without duplicating FSRS math.
+    for q in due:
+        q["schedule_preview"] = scheduler.preview(
+            q,
+            desired_retention=settings["desired_retention"],
+            params=settings["fsrs_params"],
+        )
+    return due
 
 
 @app.get("/api/activity-summary")
@@ -517,7 +542,12 @@ def read_settings(user_id: str = Depends(get_current_user_id)):
 
 @app.put("/api/settings")
 def write_settings(s: SettingsUpdate, user_id: str = Depends(get_current_user_id)):
-    return upsert_user_settings(user_id, {"revision_queue_size": s.revision_queue_size})
+    # Only write the fields the client sent, so a queue-size save from an
+    # older client can't reset the retention setting (and vice versa).
+    updates = {k: v for k, v in s.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(400, "No settings to update")
+    return upsert_user_settings(user_id, updates)
 
 
 @app.post("/api/questions/{qid}/review")
@@ -527,18 +557,20 @@ def review_question(qid: int, review: ReviewIn, user_id: str = Depends(get_curre
     question = get_question(user_id, qid)
     if not question:
         raise HTTPException(404, "Question not found")
-    result = sm2(
-        review.self_rating,
-        question["easiness_factor"],
-        question["interval"],
-        question["repetitions"],
+    settings = get_user_settings(user_id)
+    result = scheduler.apply_review(
+        question, review.self_rating, review.solution_source,
+        desired_retention=settings["desired_retention"], params=settings["fsrs_params"],
     )
-    update_question_sm2(user_id, qid, result, set_reviewed=True)
+    update_question_schedule(
+        user_id, qid, result, set_reviewed=True, solution_source=review.solution_source,
+    )
     insert_event(
         user_id, qid, "reviewed",
-        self_rating=review.self_rating,
-        interval=result["interval"], repetitions=result["repetitions"],
-        easiness_factor=result["easiness_factor"], next_review=result["next_review"],
+        self_rating=review.self_rating, solution_source=review.solution_source,
+        interval=result["interval"], next_review=result["next_review"],
+        stability=result["stability"], fsrs_difficulty=result["fsrs_difficulty"],
+        fsrs_state=result["fsrs_state"],
     )
     return get_question(user_id, qid)
 
@@ -558,7 +590,7 @@ def edit_question(qid: int, q: QuestionUpdate, user_id: str = Depends(get_curren
     if not existing:
         raise HTTPException(404, "Question not found")
     updates = {}
-    for field in ["url", "title", "difficulty", "self_rating", "time_taken", "notes", "pattern", "question_type", "approach", "mistakes", "time_complexity", "space_complexity"]:
+    for field in ["url", "title", "difficulty", "self_rating", "time_taken", "notes", "pattern", "question_type", "approach", "mistakes", "time_complexity", "space_complexity", "solution_source"]:
         val = getattr(q, field)
         if val is not None:
             updates[field] = val

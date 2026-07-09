@@ -85,3 +85,111 @@ def test_profile_rejects_unknown_timezone(client, monkeypatch):
     r = client.put("/api/profile", json={"timezone": "Mars/Olympus_Mons"})
     assert r.status_code == 400
     assert "timezone" in r.json()["detail"].lower()
+
+
+# --- POST /api/questions/{qid}/review (FSRS + solution_source) ---
+
+DEFAULT_SETTINGS = {"revision_queue_size": 20, "desired_retention": 0.9, "fsrs_params": None}
+
+QUESTION_ROW = {
+    "id": 42,
+    "stability": 20.0,
+    "fsrs_difficulty": 5.0,
+    "fsrs_state": 2,
+    "next_review": "2026-07-09",
+    "last_reviewed": "2026-06-19T10:00:00Z",
+    "solved_at": "2026-05-01T10:00:00Z",
+    "interval": 20,
+}
+
+
+def _patch_review_deps(monkeypatch, captured):
+    monkeypatch.setattr(main_module, "merge_duplicates_for_question", lambda uid, qid: qid)
+    monkeypatch.setattr(main_module, "get_question", lambda uid, qid: dict(QUESTION_ROW))
+    monkeypatch.setattr(main_module, "get_user_settings", lambda uid: dict(DEFAULT_SETTINGS))
+    monkeypatch.setattr(
+        main_module, "update_question_schedule",
+        lambda uid, qid, data, set_reviewed=False, solution_source=None: captured.update(
+            {"schedule": data, "set_reviewed": set_reviewed, "solution_source": solution_source}
+        ),
+    )
+    monkeypatch.setattr(
+        main_module, "insert_event",
+        lambda uid, qid, event_type, **fields: captured.update({"event_type": event_type, "event": fields}),
+    )
+
+
+def test_review_records_solution_source(client, monkeypatch):
+    captured = {}
+    _patch_review_deps(monkeypatch, captured)
+
+    r = client.post("/api/questions/42/review", json={"self_rating": 5, "solution_source": "solution"})
+    assert r.status_code == 200
+    assert captured["solution_source"] == "solution"
+    assert captured["set_reviewed"] is True
+    assert captured["event_type"] == "reviewed"
+    assert captured["event"]["solution_source"] == "solution"
+    # Saw-the-solution is a lapse: due again within two days despite 5 stars.
+    assert captured["schedule"]["interval"] <= 2
+    assert set(captured["schedule"]) >= {"stability", "fsrs_difficulty", "fsrs_state", "next_review", "interval"}
+
+
+def test_review_defaults_solution_source_to_self(client, monkeypatch):
+    """Old extension clients that don't send the field must keep working."""
+    captured = {}
+    _patch_review_deps(monkeypatch, captured)
+
+    r = client.post("/api/questions/42/review", json={"self_rating": 4})
+    assert r.status_code == 200
+    assert captured["solution_source"] == "self"
+    assert captured["schedule"]["interval"] > 7  # full credit for a Good review
+
+
+def test_review_rejects_invalid_solution_source(client, monkeypatch):
+    captured = {}
+    _patch_review_deps(monkeypatch, captured)
+
+    r = client.post("/api/questions/42/review", json={"self_rating": 4, "solution_source": "cheated"})
+    assert r.status_code == 422
+    assert captured == {}
+
+
+# --- GET /api/revisions/today carries schedule_preview ---
+
+def test_revisions_today_attaches_schedule_preview(client, monkeypatch):
+    monkeypatch.setattr(main_module, "get_user_settings", lambda uid: dict(DEFAULT_SETTINGS))
+    monkeypatch.setattr(main_module, "count_revisions_done_today", lambda uid: 0)
+    monkeypatch.setattr(main_module, "get_revisions_due", lambda uid, today, limit=None: [dict(QUESTION_ROW)])
+
+    r = client.get("/api/revisions/today")
+    assert r.status_code == 200
+    items = r.json()
+    preview = items[0]["schedule_preview"]
+    assert set(preview) == {"self", "hint", "solution"}
+    assert set(preview["self"]) == {"1", "2", "3", "4", "5"}
+    # The lapse row always lands sooner than the honest 5-star row.
+    assert preview["solution"]["5"]["days"] < preview["self"]["5"]["days"]
+
+
+# --- PUT /api/settings (desired_retention) ---
+
+def test_settings_roundtrip_desired_retention(client, monkeypatch):
+    saved = {}
+    monkeypatch.setattr(
+        main_module, "upsert_user_settings",
+        lambda uid, data: (saved.update(data), {**DEFAULT_SETTINGS, **data})[1],
+    )
+
+    r = client.put("/api/settings", json={"desired_retention": 0.85})
+    assert r.status_code == 200
+    assert saved == {"desired_retention": 0.85}  # queue size untouched
+    assert r.json()["desired_retention"] == 0.85
+
+
+def test_settings_rejects_out_of_range_retention(client, monkeypatch):
+    monkeypatch.setattr(
+        main_module, "upsert_user_settings",
+        lambda uid, data: (_ for _ in ()).throw(AssertionError("must not be called")),
+    )
+    r = client.put("/api/settings", json={"desired_retention": 0.5})
+    assert r.status_code == 422
