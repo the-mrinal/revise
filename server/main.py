@@ -1,5 +1,6 @@
 """FastAPI server for Revise."""
 
+import json
 import os
 import re
 from datetime import date
@@ -7,11 +8,13 @@ from typing import Literal, Optional
 from urllib.parse import urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
+import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
+from supabase_auth.errors import AuthApiError
 
 from auth import (
     exchange_code_for_session,
@@ -250,7 +253,22 @@ class GrantByEmail(BaseModel):
 
 @app.post("/api/auth/magic-link")
 def auth_magic_link(req: MagicLinkRequest):
-    send_magic_link(req.email)
+    try:
+        send_magic_link(req.email)
+    except AuthApiError as e:
+        if e.status == 429:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many login attempts — please wait a minute and try again.",
+            )
+        raise HTTPException(status_code=400, detail=e.message)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many login attempts — please wait a minute and try again.",
+            )
+        raise HTTPException(status_code=502, detail="Auth service error — please try again.")
     return {"message": "Magic link sent!"}
 
 
@@ -259,26 +277,62 @@ def auth_callback(
     token_hash: str = Query(None),
     type: str = Query(None),
 ):
+    # Tokens must never ride the URL into /dashboard: the browser extension's
+    # content script races the page for the hash fragment and can strip it
+    # before the dashboard reads it (users with the old extension lost every
+    # login this way). Instead this same-origin callback page writes the tokens
+    # straight into localStorage("auth") — where the dashboard already looks —
+    # and redirects to a clean URL with nothing left to steal.
+
     # PKCE flow: Supabase sends token_hash & type as query params
     if token_hash and type:
-        tokens = exchange_code_for_session(token_hash, type)
-        redirect_url = (
-            f"/dashboard#access_token={tokens['access_token']}"
-            f"&refresh_token={tokens['refresh_token']}"
+        try:
+            tokens = exchange_code_for_session(token_hash, type)
+        except AuthApiError:
+            return HTMLResponse(
+                "<p>This sign-in link has expired or was already used. "
+                '<a href="/">Request a new one</a>.</p>',
+                status_code=401,
+            )
+        return HTMLResponse(
+            "<script>localStorage.setItem('auth', "
+            + json.dumps(json.dumps(
+                {"access_token": tokens["access_token"], "refresh_token": tokens["refresh_token"]}
+            ))
+            + "); location.replace('/dashboard');</script>"
         )
-        return RedirectResponse(url=redirect_url)
 
     # Implicit flow: Supabase sends tokens in the URL fragment (#access_token=...)
-    # Fragments aren't sent to the server, so serve a page that forwards them.
+    # Fragments aren't sent to the server, so an inline script moves them to
+    # localStorage. It runs synchronously during parse, before the extension's
+    # async hash-strip can land.
     return HTMLResponse(
-        "<script>location.replace('/dashboard' + location.hash)</script>"
+        """<script>
+(function () {
+  var p = new URLSearchParams(location.hash.substring(1));
+  var at = p.get("access_token"), rt = p.get("refresh_token");
+  if (at && rt) {
+    localStorage.setItem("auth", JSON.stringify({ access_token: at, refresh_token: rt }));
+    location.replace("/dashboard");
+  } else {
+    location.replace("/dashboard" + location.hash);
+  }
+})();
+</script>"""
     )
 
 
 @app.post("/api/auth/refresh")
 def auth_refresh(req: RefreshRequest):
-    tokens = refresh_session(req.refresh_token)
-    return tokens
+    try:
+        return refresh_session(req.refresh_token)
+    except AuthApiError as e:
+        # Invalid / already-used / revoked refresh token. 401 tells clients the
+        # session is dead (sign in again) — a 500 here reads as transient and
+        # sends them into a retry loop.
+        raise HTTPException(status_code=401, detail=f"Session expired: {e.message}")
+    except httpx.HTTPStatusError:
+        raise HTTPException(status_code=502, detail="Auth service error — please try again.")
 
 
 # --- Identity & access ---
