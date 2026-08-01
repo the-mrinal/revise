@@ -1,0 +1,11 @@
+# Homelab override — joins the shared proxy network; loopback-bind the port
+# (the repo compose publishes 8765 on all interfaces).
+services:
+  server:
+    ports: !override
+      - "127.0.0.1:8765:8765"
+    networks: [default, homelab]
+
+networks:
+  homelab:
+    external: true

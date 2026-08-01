@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: server/Dockerfile
+    restart: unless-stopped
     ports:
       - "8765:8765"
     env_file:
