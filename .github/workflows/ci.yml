@@ -29,7 +29,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install ruff
-        run: pip install ruff
+        # same pin as server/requirements-dev.txt — an unpinned install broke
+        # every PR when a new ruff release added rules
+        run: pip install -r server/requirements-dev.txt
       - name: Run ruff
         run: ruff check server/
 
