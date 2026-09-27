@@ -46,6 +46,12 @@ async function refreshAuthToken(force = false) {
         return tokens;
       } else {
         console.warn("[Revise] Token refresh failed:", resp.status);
+        if (resp.status >= 400 && resp.status < 500) {
+          // Session is dead (revoked/rotated-away refresh token) — keeping it
+          // would retry forever on every alarm. Drop it; the dashboard content
+          // script re-syncs fresh tokens on the next dashboard visit.
+          await chrome.storage.local.remove("auth");
+        }
         return null;
       }
     } catch (e) {
@@ -59,20 +65,9 @@ async function refreshAuthToken(force = false) {
   return refreshInProgress;
 }
 
-// --- Token capture from dashboard callback URL ---
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url && changeInfo.url.includes("/dashboard#access_token=")) {
-    try {
-      const hash = new URL(changeInfo.url).hash.substring(1);
-      const params = new URLSearchParams(hash);
-      const access_token = params.get("access_token");
-      const refresh_token = params.get("refresh_token");
-      if (access_token && refresh_token) {
-        chrome.storage.local.set({ auth: { access_token, refresh_token } });
-      }
-    } catch {}
-  }
-});
+// Token capture from the callback URL was removed on purpose: the dashboard
+// owns the magic-link hash, and the content script (capture-tokens.js) syncs
+// tokens both ways once the page has stored them.
 
 // --- Badge update with auth ---
 async function updateBadge() {
