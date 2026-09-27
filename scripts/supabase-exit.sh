@@ -176,8 +176,9 @@ cmd_deploy() {
   wait_for_site
   docker compose logs server 2>&1 | grep '\[migrate\]' | tail -4 | sed 's/^/  /'
   ok "site is up, serving from: $(server_target)"
-  [ "$(server_target)" = "supabase" ] || fail "Expected to be serving from Supabase at this stage."
-  bold "Deployed. Next: 'verify'."
+  [ "$(server_target)" = "$(env_get DB_TARGET)" ] \
+    || fail "Serving from '$(server_target)' but .env says DB_TARGET=$(env_get DB_TARGET)."
+  bold "Deployed."
 }
 
 cmd_verify() {
@@ -282,7 +283,9 @@ cmd_status() {
 }
 
 case "${1:-}" in
-  all) cmd_setup; cmd_deploy; cmd_verify ;;
+  all)
+    [ "$(env_get DB_TARGET)" = "local" ] && fail "The cutover is done; 'all' was for the first setup. Run a single step (see the list: no arguments)."
+    cmd_setup; cmd_deploy; cmd_verify ;;
   setup) cmd_setup ;;
   deploy) cmd_deploy ;;
   verify) cmd_verify ;;
