@@ -703,6 +703,28 @@
         color: #555;
         margin-top: 12px;
       }
+      .sun {
+        background: #0d1f14;
+        border: 1px solid #1f4d33;
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin-bottom: 12px;
+        color: #b8e6c9;
+        font-size: 12.5px;
+        line-height: 1.45;
+      }
+      .sun b { color: #6ee7b7; }
+      .sun.off {
+        background: #1f1a0d;
+        border-color: #4d3f1f;
+        color: #e6d6b8;
+      }
+      .sun.off b { color: #fbbf24; }
+      .own-pick {
+        font-size: 12.5px;
+        color: #e6d6b8;
+        margin: -4px 0 12px;
+      }
     `;
 
     const container = document.createElement("div");
@@ -785,6 +807,90 @@
     }); } catch { /* extension context invalidated */ }
   }
 
+  // =============================================
+  // SUNDAY: only for an account connected to Sunday
+  // background.js keeps chrome.storage.local "sunday" from /api/me; when it
+  // is not set, applySunday returns before touching anything, so the panel
+  // is exactly as it was.
+  // =============================================
+  function getSunday() {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get("sunday", (data) => {
+          if (chrome.runtime.lastError) { resolve(null); return; }
+          resolve(data.sunday || null);
+        });
+      } catch { resolve(null); }
+    });
+  }
+
+  // Sunday's answer for this link: {in_week, week, module, group}, or null
+  // when it can't be had. {linked: false} means Sunday has disconnected.
+  async function sundayWhere(url) {
+    try {
+      const r = await apiFetch(`/sunday/where?url=${encodeURIComponent(url)}`);
+      if (!r.ok) return null;
+      const w = await r.json();
+      if (w && w.linked === false) {
+        try { chrome.storage.local.remove("sunday"); } catch {}
+        return null;
+      }
+      return w;
+    } catch { return null; }
+  }
+
+  function sundayLine(where) {
+    const div = document.createElement("div");
+    const b = document.createElement("b");
+    div.appendChild(b);
+    div.appendChild(document.createElement("br"));
+    if (where.in_week) {
+      div.className = "sun";
+      b.textContent = "In your Sunday week";
+      const parts = [`Week ${where.week}`];
+      if (where.module) parts.push(`Module ${where.module}`);
+      if (where.group) parts.push(where.group);
+      div.appendChild(document.createTextNode(`${parts.join(" › ")}. Saving ticks it there.`));
+    } else {
+      div.className = "sun off";
+      b.textContent = "Not in your Sunday roadmap";
+      div.appendChild(document.createTextNode("It can still go in your log as your own pick."));
+    }
+    return div;
+  }
+
+  async function applySunday(url, saveBtnId) {
+    const sunday = await getSunday();
+    if (!sunday || !shadow) return;
+
+    // Sunday's words on Revise's three note fields.
+    const relabel = (id, text) => {
+      const label = shadow.getElementById(id)?.previousElementSibling;
+      if (label && label.tagName === "LABEL") label.textContent = text;
+    };
+    relabel("revise-approach", "Idea used");
+    relabel("revise-mistakes", "What I missed");
+    relabel("revise-notes", "Lesson");
+
+    const where = await sundayWhere(url);
+    const btn = shadow && shadow.getElementById(saveBtnId);
+    // Not an active mentee (no week), Sunday unreachable, or the panel moved on.
+    if (!btn || !where || where.week == null) return;
+    const body = shadow.getElementById("revise-body");
+    body.querySelectorAll(".sun, .own-pick").forEach((el) => el.remove());
+    body.insertBefore(sundayLine(where), body.firstChild);
+
+    if (!where.in_week) {
+      // Sunday places it: anything not on the roadmap becomes an own pick.
+      const own = document.createElement("div");
+      own.className = "own-pick";
+      own.textContent = `It goes in your Sunday log as your own pick, in week ${where.week}.`;
+      btn.parentNode.insertBefore(own, btn);
+    }
+    btn.dataset.sundayLabel = where.in_week ? "Save · tick it in Sunday" : "Save · add to my Sunday log";
+    if (btn.textContent !== "Saving...") btn.textContent = btn.dataset.sundayLabel;
+  }
+
   function renderForm() {
     const body = shadow.getElementById("revise-body");
     const q = currentQuestion;
@@ -854,6 +960,7 @@
     shadow.getElementById("revise-save").addEventListener("click", () => {
       saveNotes(selectedRating);
     });
+    applySunday(q.url || window.location.href, "revise-save");
   }
 
   function renderNotTracked() {
@@ -991,7 +1098,7 @@
     }
 
     btn.disabled = false;
-    btn.textContent = "Save Notes";
+    btn.textContent = btn.dataset.sundayLabel || "Save Notes";
   }
 
   // --- Timer controls ---
@@ -1146,6 +1253,7 @@
     shadow.getElementById("revise-finish").addEventListener("click", () => {
       saveAndFinish(timer, selectedRating, totalMinutes, selectedSource);
     });
+    applySunday(timer.url || window.location.href, "revise-finish");
   }
 
   async function saveAndFinish(timer, selectedRating, totalMinutes, selectedSource = "self") {
@@ -1168,7 +1276,7 @@
         try { const err = await reviewRes.json(); msg = err.detail || msg; } catch {}
         showToast(msg, "error");
         btn.disabled = false;
-        btn.textContent = "Save & Finish";
+        btn.textContent = btn.dataset.sundayLabel || "Save & Finish";
         return;
       }
 
@@ -1206,7 +1314,7 @@
         try { const err = await updateRes.json(); msg = err.detail || msg; } catch {}
         showToast(msg, "error");
         btn.disabled = false;
-        btn.textContent = "Save & Finish";
+        btn.textContent = btn.dataset.sundayLabel || "Save & Finish";
         return;
       }
 
@@ -1219,7 +1327,7 @@
     } catch {
       showToast("Cannot reach server", "error");
       btn.disabled = false;
-      btn.textContent = "Save & Finish";
+      btn.textContent = btn.dataset.sundayLabel || "Save & Finish";
     }
   }
 

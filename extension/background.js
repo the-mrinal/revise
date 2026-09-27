@@ -115,6 +115,27 @@ async function updateBadge() {
   }
 }
 
+// --- Sunday link, kept from /api/me ---
+// {login, connected_at} while this Revise account is connected to Sunday,
+// else null. The panel and popup read it from storage and change nothing
+// unless it is set. A failed check keeps what was there; signing out clears it.
+async function updateSunday() {
+  try {
+    const { auth } = await chrome.storage.local.get("auth");
+    if (!auth?.access_token) {
+      await chrome.storage.local.remove("sunday");
+      return;
+    }
+    const resp = await fetch(`${API_BASE}/me`, {
+      headers: { Authorization: `Bearer ${auth.access_token}` },
+    });
+    if (!resp.ok) return;
+    const me = await resp.json();
+    if (me.sunday) await chrome.storage.local.set({ sunday: me.sunday });
+    else await chrome.storage.local.remove("sunday");
+  } catch { /* offline: keep what was there */ }
+}
+
 // Update badge every 30 minutes
 chrome.alarms.create("checkRevisions", { periodInMinutes: 30 });
 
@@ -129,18 +150,20 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     refreshAuthToken();
   } else if (alarm.name === "checkRevisions" || alarm.name === "checkTimer") {
     updateBadge();
+    if (alarm.name === "checkRevisions") updateSunday();
   }
 });
 
 // Update on install/startup — refresh token first, then update badge
-chrome.runtime.onInstalled.addListener(() => { refreshAuthToken().then(updateBadge); });
-chrome.runtime.onStartup.addListener(() => { refreshAuthToken().then(updateBadge); });
+chrome.runtime.onInstalled.addListener(() => { refreshAuthToken().then(updateBadge).then(updateSunday); });
+chrome.runtime.onStartup.addListener(() => { refreshAuthToken().then(updateBadge).then(updateSunday); });
 
 // Update badge when storage changes (timer start/stop or auth change)
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && (changes.timer || changes.auth)) {
     updateBadge();
   }
+  if (area === "local" && changes.auth) updateSunday();
 });
 
 // --- Start-timer transaction ---
