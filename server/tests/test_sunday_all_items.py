@@ -1,6 +1,7 @@
 """All items' Sunday column: where Sunday put each save (sunday_placements),
 the `sunday` field in the item list, its labels, and the CSV export."""
 
+import hashlib
 import json
 import re
 import shutil
@@ -16,7 +17,7 @@ import db
 import main as main_module
 import sunday
 from test_auth import U1, U2
-from test_sunday_link import SECRET, SUNDAY, TOKEN, bearer
+from test_sunday_link import HEADERS, SECRET, SUNDAY, TOKEN, bearer, link_row
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "templates" / "dashboard.html"
 
@@ -115,6 +116,38 @@ def test_a_401_from_sunday_removes_the_placements(app, answers, monkeypatch):
     monkeypatch.setattr(sunday.httpx, "post", lambda *a, **k: httpx.Response(401))
     sunday.send_pending()
     assert placements() == []
+
+
+# --- Sunday's unlink, by the token's hash --------------------------------------------------
+
+TOKEN_HASH = hashlib.sha256(TOKEN.encode()).hexdigest()
+
+
+def test_unlink_by_token_hash_removes_the_link_and_placements(app, answers):
+    save(app, "two-sum")
+    answers.append({"placed": "week", "week": 1, "module": 1})
+    sunday.send_pending()
+    r = app.post("/api/sunday/unlink", json={"token_hash": TOKEN_HASH}, headers=HEADERS)
+    assert r.status_code == 200 and r.json() == {"ok": True, "removed": True}
+    assert link_row(U1) is None and placements() == []
+    assert app.get("/api/me", headers=bearer(U1)).json()["sunday"] is None
+
+
+def test_unlink_by_a_wrong_hash_removes_nothing(app):
+    wrong = hashlib.sha256(b"not-the-token").hexdigest()
+    r = app.post("/api/sunday/unlink", json={"token_hash": wrong}, headers=HEADERS)
+    assert r.status_code == 200 and r.json()["removed"] is False and link_row(U1)
+
+
+def test_unlink_by_hash_needs_the_secret(app):
+    r = app.post("/api/sunday/unlink", json={"token_hash": TOKEN_HASH},
+                 headers={"X-Revise-Secret": "wrong"})
+    assert r.status_code == 401 and link_row(U1)
+
+
+def test_unlink_needs_a_hash_or_a_token(app):
+    r = app.post("/api/sunday/unlink", json={}, headers=HEADERS)
+    assert r.status_code == 422 and link_row(U1)
 
 
 # --- the field in the item list ----------------------------------------------------------

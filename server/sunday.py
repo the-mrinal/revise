@@ -2,7 +2,8 @@
 
 Sunday's server calls the two /api/sunday routes with the shared secret
 REVISE_SUNDAY_SECRET: connect (find or make the account, keep Sunday's token,
-answer a 5-minute one-time sign-in link that ends back on Sunday) and unlink.
+answer a 5-minute one-time sign-in link that ends back on Sunday) and unlink
+(by the token's SHA-256 hex, which is all Sunday keeps).
 That secret lets Sunday sign anyone in, so these two routes are the only
 place it is accepted. Without it, or without SUNDAY_URL, every /api/sunday
 route answers 404 and Revise behaves as if Sunday didn't exist.
@@ -91,6 +92,18 @@ def save_link(user_id: str, token: str, login: str) -> None:
 def remove_link_by_token(token: str) -> bool:
     row = db.fetch_one(
         "DELETE FROM sunday_links WHERE sunday_token = %s RETURNING user_id", (token,)
+    )
+    if row:
+        _remove_placements(row["user_id"])
+    return row is not None
+
+
+def remove_link_by_token_hash(token_hash: str) -> bool:
+    """Sunday's disconnect: it knows the token only by its SHA-256 hex."""
+    row = db.fetch_one(
+        "DELETE FROM sunday_links "
+        "WHERE encode(sha256(convert_to(sunday_token, 'UTF8')), 'hex') = %s RETURNING user_id",
+        (token_hash.strip().lower(),),
     )
     if row:
         _remove_placements(row["user_id"])
@@ -317,7 +330,9 @@ class ConnectIn(BaseModel):
 
 
 class UnlinkIn(BaseModel):
-    token: str = Field(min_length=1)
+    """Sunday keeps only the SHA-256 (hex) of the token, so it sends that."""
+    token_hash: str | None = Field(default=None, min_length=1)
+    token: str | None = Field(default=None, min_length=1)
 
 
 def _find_or_make_user(github_id: str, login: str, email: str) -> str:
@@ -355,7 +370,11 @@ def connect(body: ConnectIn):
 
 @router.post("/api/sunday/unlink", dependencies=[Depends(require_secret)])
 def unlink(body: UnlinkIn):
-    return {"ok": True, "removed": remove_link_by_token(body.token)}
+    if body.token_hash:
+        return {"ok": True, "removed": remove_link_by_token_hash(body.token_hash)}
+    if body.token:
+        return {"ok": True, "removed": remove_link_by_token(body.token)}
+    raise HTTPException(422, "token_hash is required")
 
 
 @router.post("/api/sunday/disconnect", dependencies=[Depends(require_enabled)])
