@@ -13,4 +13,6 @@ COPY thoughts/shared/research/diagrams/ ./research-data/diagrams/
 
 EXPOSE 8765
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8765"]
+# Apply pending database migrations, then serve. One worker only: the
+# cutover hold (cutover.py) keeps its state in process memory.
+CMD ["sh", "-c", "python migrate.py && exec uvicorn main:app --host 0.0.0.0 --port 8765 --workers 1"]

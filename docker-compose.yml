@@ -9,3 +9,36 @@ services:
       - .env
     environment:
       - SERVER_URL=https://revise.mrinal.dev
+      - DATABASE_URL=postgresql://revise:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/revise
+      # Which database serves requests: "supabase" until the cutover, then
+      # "local". Required, so a deploy can never silently start on an empty
+      # database (compose refuses before touching the running container).
+      - DB_TARGET=${DB_TARGET:?set DB_TARGET in .env (supabase until the cutover, then local)}
+      - AVATAR_DIR=/data/avatars
+      - CUTOVER_DIR=/data/cutover
+    volumes:
+      - revise-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Revise's own Postgres. No published port: only the server reaches it.
+  db:
+    image: postgres:17.6
+    environment:
+      - POSTGRES_USER=revise
+      - POSTGRES_DB=revise
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U revise -d revise"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  revise-data:

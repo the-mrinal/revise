@@ -8,6 +8,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from supabase import create_client
 
+from database import ensure_user
+
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -77,6 +79,8 @@ def get_current_claims(
     payload = verify_token(credentials.credentials)
     if not payload.get("sub"):
         raise HTTPException(status_code=401, detail="Token missing sub claim")
+    # Accounts created in Supabase Auth get their users row on first use.
+    ensure_user(payload["sub"], payload.get("email"))
     return payload
 
 
