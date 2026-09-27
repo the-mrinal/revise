@@ -416,6 +416,7 @@
     <input type="email" id="loginEmail" placeholder="you@example.com">
     <button id="loginBtn">Send Magic Link</button>
     <p class="login-status" id="loginStatus"></p>
+    <p class="login-or" id="noGithubNote" hidden>No GitHub account? <a href="https://mrinal.dev" style="color:var(--accent)">Ask for a sign-in link</a>.</p>
   </div>
 </div>
 
@@ -957,8 +958,15 @@ async function loadAuthOptions() {
     const cfg = await fetch(`${API}/auth/config`).then(r => r.json());
     if (!cfg.github) return;
     document.getElementById("githubLoginBtn").hidden = false;
-    document.getElementById("loginOr").hidden = false;
     document.getElementById("loginSubtitle").textContent = "Sign in to continue";
+    if (cfg.email_links === false) {
+      // Email links are retired: GitHub only, with a way to ask for help.
+      document.getElementById("loginEmail").style.display = "none";
+      document.getElementById("loginBtn").style.display = "none";
+      document.getElementById("noGithubNote").hidden = false;
+    } else {
+      document.getElementById("loginOr").hidden = false;
+    }
   } catch {}
 }
 

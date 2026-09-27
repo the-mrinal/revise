@@ -17,5 +17,5 @@ You should get a response within a few days. Once the issue is confirmed and fix
 
 ## Scope notes
 
-- User data isolation relies on Supabase Row Level Security — anything that lets one user read or write another user's rows is a critical bug.
-- Auth uses Supabase magic links (JWT bearer tokens). Token handling lives in `server/auth.py` and `extension/capture-tokens.js`.
+- User data isolation is enforced by the server: every query is scoped to the signed-in account (`server/database.py`). Anything that lets one user read or write another user's rows is a critical bug.
+- Sign-in is via GitHub; Revise issues its own sessions (JWT access tokens, SHA-256-hashed refresh tokens). Token handling lives in `server/auth.py`, `server/main.py` (the `/api/auth/*` routes) and `extension/capture-tokens.js`.

@@ -1187,3 +1187,11 @@ def merge_users(from_id: str, into_id: str) -> dict:
             raise ValueError("The account to merge from doesn't exist")
     _known_users.clear()
     return moved
+
+
+def use_sign_in_link(jti: str, user_id: str) -> bool:
+    """Record a one-time sign-in link as used. False if it already was."""
+    return db.execute(
+        "INSERT INTO used_sign_in_links (jti, user_id) VALUES (%s, %s) ON CONFLICT (jti) DO NOTHING",
+        (jti, user_id),
+    ) == 1

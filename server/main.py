@@ -78,6 +78,7 @@ from database import (
     refresh_identity,
     revoke_feature,
     set_avatar_if_missing,
+    use_sign_in_link,
     users_matching_emails_without,
     set_user_admin,
     update_profile,
@@ -93,6 +94,7 @@ from patterns import (
     get_all_pattern_labels,
     get_pattern_for_url,
 )
+import auth
 import auth_pages
 import cutover
 import db
@@ -288,6 +290,10 @@ class GrantByEmail(BaseModel):
     feature: str
 
 
+class SignInLinkRequest(BaseModel):
+    email: str
+
+
 class MergeUsers(BaseModel):
     from_email: str
     into_email: str
@@ -308,11 +314,21 @@ def auth_config():
         # GitHub-only accounts need our own database: on Supabase, every
         # question must belong to a Supabase Auth user.
         "new_github_accounts": github_oauth.configured() and cutover.current_target() == "local",
+        # Email sign-in links come from Supabase; gone once it's switched off.
+        "email_links": auth.SUPABASE_AUTH,
     }
+
+
+EMAIL_LINKS_RETIRED = (
+    "Email sign-in links are retired. Sign in with GitHub instead; "
+    "if you can't use GitHub, contact the site owner via mrinal.dev for a sign-in link."
+)
 
 
 @app.post("/api/auth/magic-link")
 def auth_magic_link(req: MagicLinkRequest):
+    if not auth.SUPABASE_AUTH:
+        raise HTTPException(status_code=410, detail=EMAIL_LINKS_RETIRED)
     try:
         send_magic_link(req.email, allow_new_accounts=not github_oauth.configured())
     except AuthApiError as e:
@@ -349,6 +365,9 @@ def auth_callback(
     # login this way). Instead this same-origin callback page writes the tokens
     # straight into localStorage("auth") — where the dashboard already looks —
     # and redirects to a clean URL with nothing left to steal.
+
+    if not auth.SUPABASE_AUTH:
+        return auth_pages.message("Email links are retired", EMAIL_LINKS_RETIRED, 410)
 
     # PKCE flow: Supabase sends token_hash & type as query params
     if token_hash and type:
@@ -405,6 +424,26 @@ def auth_refresh(req: RefreshRequest, request: Request):
 def auth_logout(req: RefreshRequest):
     end_session(req.refresh_token)
     return {"ok": True}
+
+
+# --- One-time sign-in links (for people who can't use GitHub) ---
+
+SIGN_IN_LINK_HOURS = 72
+
+
+@app.get("/api/auth/one-time")
+def one_time_sign_in(request: Request, token: str = Query(...)):
+    claims = read_purpose_token(token, "one-time-sign-in")
+    if not claims:
+        return auth_pages.message("That sign-in link has expired", "Ask for a new one.", 401)
+    user = get_user(claims["sub"])
+    if not user:
+        return auth_pages.message("That account no longer exists", "Ask for a new link.", 404)
+    if not use_sign_in_link(claims["jti"], claims["sub"]):
+        return auth_pages.message("That sign-in link was already used", "Each link works once. Ask for a new one.", 410)
+    record_sign_in(claims["sub"], user.get("email"))
+    tokens = start_session(claims["sub"], user.get("email"), _user_agent(request))
+    return auth_pages.signed_in(tokens, "/dashboard")
 
 
 # --- Sign in with GitHub ---
@@ -701,6 +740,23 @@ def admin_grant_by_email(body: GrantByEmail, claims: dict = Depends(require_admi
         "grant", feature=body.feature, target_email=user["email"],
     )
     return {"ok": True, "user_id": user["user_id"], "email": user["email"]}
+
+
+@app.post("/api/admin/sign-in-link")
+def admin_sign_in_link(body: SignInLinkRequest, claims: dict = Depends(require_admin)):
+    """A link that signs someone into their account once, within 72 hours.
+    Send it to them yourself (it's as good as their password until used)."""
+    user = find_user_by_email(body.email)
+    if not user:
+        raise HTTPException(404, "No account uses that email")
+    token = sign_purpose_token(
+        {"sub": user["user_id"], "jti": secrets.token_urlsafe(16)},
+        "one-time-sign-in", SIGN_IN_LINK_HOURS * 3600,
+    )
+    log_access_event(claims["sub"], claims.get("email"), user["user_id"], "sign_in_link",
+                     target_email=user["email"])
+    return {"url": f"{SERVER_URL}/api/auth/one-time?token={token}", "email": user["email"],
+            "expires_in_hours": SIGN_IN_LINK_HOURS}
 
 
 @app.post("/api/admin/merge-users")

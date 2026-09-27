@@ -160,7 +160,8 @@ def test_magic_link_only_for_existing_accounts_once_github_is_on(app, github, mo
                         lambda email, allow_new_accounts: seen.update(allow=allow_new_accounts))
     assert app.post("/api/auth/magic-link", json={"email": "x@example.com"}).status_code == 200
     assert seen["allow"] is False
-    assert app.get("/api/auth/config").json() == {"github": True, "new_github_accounts": True}
+    assert app.get("/api/auth/config").json() == {
+        "github": True, "new_github_accounts": True, "email_links": True}
 
 
 # --- GitHub sign-in ---------------------------------------------------------------------

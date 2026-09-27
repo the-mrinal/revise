@@ -140,7 +140,13 @@ fetch(`${API}/auth/config`)
   .then((cfg) => {
     if (!cfg.github) return;
     document.getElementById("githubLoginBtn").style.display = "block";
-    document.getElementById("loginOr").style.display = "block";
+    if (cfg.email_links === false) {
+      // Email links are retired: hide the email form.
+      document.getElementById("loginEmail").closest(".field").style.display = "none";
+      document.getElementById("sendMagicLinkBtn").style.display = "none";
+    } else {
+      document.getElementById("loginOr").style.display = "block";
+    }
   })
   .catch(() => {});
 
