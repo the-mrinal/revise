@@ -100,6 +100,7 @@ import cutover
 import db
 import github_oauth
 import scheduler
+import sunday
 
 
 @asynccontextmanager
@@ -128,6 +129,9 @@ app.add_middleware(
 # Named features that can be granted per-user via the admin panel (/admin).
 # Add a feature here, then gate its page/endpoint on get_user_features().
 FEATURES = ["research"]
+
+# Connecting to Sunday (sunday.py): 404 unless REVISE_SUNDAY_SECRET and SUNDAY_URL are set.
+app.include_router(sunday.router)
 
 
 def require_admin(claims: dict = Depends(get_current_claims)) -> dict:
@@ -432,7 +436,7 @@ SIGN_IN_LINK_HOURS = 72
 
 
 @app.get("/api/auth/one-time")
-def one_time_sign_in(request: Request, token: str = Query(...)):
+def one_time_sign_in(request: Request, token: str = Query(...), next: str = Query(None)):
     claims = read_purpose_token(token, "one-time-sign-in")
     if not claims:
         return auth_pages.message("That sign-in link has expired", "Ask for a new one.", 401)
@@ -443,6 +447,8 @@ def one_time_sign_in(request: Request, token: str = Query(...)):
         return auth_pages.message("That sign-in link was already used", "Each link works once. Ask for a new one.", 410)
     record_sign_in(claims["sub"], user.get("email"))
     tokens = start_session(claims["sub"], user.get("email"), _user_agent(request))
+    if sunday.valid_next(next):  # Sunday's Connect Revise: back to Sunday, signed in
+        return auth_pages.signed_in_back_to_sunday(tokens, next)
     return auth_pages.signed_in(tokens, "/dashboard")
 
 
@@ -609,6 +615,7 @@ def me(claims: dict = Depends(get_current_claims)):
             "available": github_oauth.configured(),
             "login": github["login"] if github else None,
         },
+        "sunday": sunday.get_link(user_id),
     }
 
 

@@ -696,6 +696,12 @@
       <span id="mergeStatus" style="font-size:12px;color:var(--muted);margin-left:8px;"></span>
       <p style="font-size:11px;color:var(--muted);margin-top:8px;">Consolidate questions with the same URL into a single entry.</p>
     </div>
+    <div id="sundaySettings" hidden style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px;">
+      <h3 style="font-size:13px;margin-bottom:8px;">Sunday</h3>
+      <p id="sundayText" style="font-size:13px;margin-bottom:8px;"></p>
+      <button id="sundayDisconnectBtn" onclick="disconnectSunday()" style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:6px;font-size:13px;cursor:pointer;">Disconnect</button>
+      <span id="sundayStatus" style="font-size:12px;color:var(--muted);margin-left:8px;"></span>
+    </div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeSettings()">Close</button>
     </div>
@@ -1629,6 +1635,34 @@ async function openSettings() {
   document.getElementById('queueStatus').textContent = '';
   await loadPlatforms();
   await loadQueueSize();
+  await loadSundayLink();
+}
+
+// Shown only while this account is connected to Sunday.
+async function loadSundayLink() {
+  const box = document.getElementById('sundaySettings');
+  box.hidden = true;
+  document.getElementById('sundayStatus').textContent = '';
+  try {
+    const me = await apiFetch('/me').then(r => r.json());
+    if (!me.sunday) return;
+    const since = new Date(me.sunday.connected_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    document.getElementById('sundayText').innerHTML =
+      `Connected to <b>@${esc(me.sunday.login)}</b> on Sunday since ${esc(since)}. Each save also goes to your Sunday log.`;
+    box.hidden = false;
+  } catch {}
+}
+
+async function disconnectSunday() {
+  const status = document.getElementById('sundayStatus');
+  status.textContent = 'Disconnecting...';
+  try {
+    const r = await apiFetch('/sunday/disconnect', { method: 'POST' });
+    if (!r.ok) throw new Error();
+    document.getElementById('sundaySettings').hidden = true;
+  } catch {
+    status.textContent = 'Failed to disconnect';
+  }
 }
 
 async function loadQueueSize() {

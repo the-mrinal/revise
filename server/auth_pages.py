@@ -43,6 +43,27 @@ def signed_in(tokens: dict, next_path: str):
     )
 
 
+def signed_in_back_to_sunday(tokens: dict, next_url: str):
+    """Like signed_in, but the next page is on Sunday, where the extension's
+    content script (capture-tokens.js, on this site only) can't follow. The
+    session is stored by the first script on the page, before the content
+    script's first read of localStorage can land; the page then stays about a
+    second so that read and its copy into the extension finish, and goes on."""
+    from fastapi.responses import HTMLResponse
+
+    stored = json.dumps({"access_token": tokens["access_token"], "refresh_token": tokens["refresh_token"]})
+    target = json.dumps(next_url).replace("</", "<\\/")
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8>"
+        "<script>localStorage.setItem('auth', " + json.dumps(stored).replace("</", "<\\/") + ");"
+        " setTimeout(function () { location.replace(" + target + "); }, 1000);</script>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        f"<title>Signed in · Revise</title><style>{_STYLE}</style>"
+        "<div class=box><p>Revise</p><h1>Signed in. Taking you back to Sunday…</h1>"
+        f"<a class=secondary href='{html.escape(next_url)}'>Continue</a></div>"
+    )
+
+
 def safe_next(path: str | None) -> str:
     """Only same-site paths, so the sign-in flow can't redirect elsewhere."""
     if path and path.startswith("/") and not path.startswith(("//", "/\\")):
