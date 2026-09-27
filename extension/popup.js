@@ -79,6 +79,7 @@ function showView(view) {
 
 function showLoginView() {
   showView(loginView);
+  document.getElementById("sundayLine").style.display = "none";
   document.getElementById("signOutLink").style.display = "none";
   document.getElementById("resyncBtn").style.display = "inline";
 }
@@ -121,6 +122,7 @@ async function initAuth() {
       document.getElementById("statusText").textContent = "Server connected";
       checkActiveTimer();
       loadRevisions(dueTotal);
+      initSunday();
       return;
     }
   } catch {}
@@ -504,7 +506,7 @@ document.getElementById("finishBtn").addEventListener("click", async () => {
       try { const err = await reviewRes.json(); msg = err.detail || msg; } catch {}
       showToast(msg, "error");
       btn.disabled = false;
-      btn.textContent = "Save";
+      btn.textContent = btn.dataset.sundayLabel || "Save";
       return;
     }
 
@@ -564,7 +566,7 @@ document.getElementById("finishBtn").addEventListener("click", async () => {
     btn.disabled = false;
   }
 
-  btn.textContent = "Save & Finish";
+  btn.textContent = btn.dataset.sundayLabel || "Save & Finish";
 });
 
 // --- Toast ---
@@ -667,6 +669,66 @@ document.getElementById("openOverlayLink").addEventListener("click", (e) => {
     }
   });
 });
+
+// --- Sunday: only for an account connected to Sunday ---
+// background.js keeps chrome.storage.local "sunday" from /api/me. When it is
+// not set this returns before touching anything, so the popup is as it was.
+// Sunday decides where a save goes: a link on the roadmap ticks its row,
+// anything else becomes an own pick, so the own-pick line only says so.
+async function initSunday() {
+  const { sunday } = await chrome.storage.local.get("sunday");
+  if (!sunday) return;
+
+  const notesLabel = document.getElementById("notes").previousElementSibling;
+  if (notesLabel && notesLabel.tagName === "LABEL") notesLabel.textContent = "Lesson";
+
+  const { timer } = await chrome.storage.local.get("timer");
+  let url = timer?.url;
+  if (!url) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    url = tabs[0]?.url;
+  }
+  if (!url || !/^https?:/.test(url)) return;
+
+  let where = null;
+  try {
+    const r = await apiFetch(`/sunday/where?url=${encodeURIComponent(url)}`);
+    if (r.ok) where = await r.json();
+  } catch {}
+  if (where && where.linked === false) {
+    await chrome.storage.local.remove("sunday");
+    return;
+  }
+  // Not an active mentee (no week), or Sunday can't be reached.
+  if (!where || where.week == null) return;
+
+  const line = document.getElementById("sundayLine");
+  const b = document.createElement("b");
+  line.replaceChildren(b, document.createElement("br"));
+  if (where.in_week) {
+    b.style.color = "#6ee7b7";
+    b.textContent = "In your Sunday week";
+    const parts = [`Week ${where.week}`];
+    if (where.module) parts.push(`Module ${where.module}`);
+    if (where.group) parts.push(where.group);
+    line.append(`${parts.join(" › ")}. Saving ticks it there.`);
+  } else {
+    line.style.background = "#1f1a0d";
+    line.style.borderColor = "#4d3f1f";
+    line.style.color = "#e6d6b8";
+    b.style.color = "#fbbf24";
+    b.textContent = "Not in your Sunday roadmap";
+    line.append("It can still go in your log as your own pick.");
+    const own = document.getElementById("sundayOwnPick");
+    own.textContent = `It goes in your Sunday log as your own pick, in week ${where.week}.`;
+    own.style.display = "block";
+  }
+  line.style.display = "block";
+
+  const btn = document.getElementById("finishBtn");
+  btn.dataset.sundayLabel = where.in_week ? "Save · tick it in Sunday" : "Save · add to my Sunday log";
+  if (btn.textContent !== "Saving...") btn.textContent = btn.dataset.sundayLabel;
+}
 
 // --- Init ---
 initAuth();

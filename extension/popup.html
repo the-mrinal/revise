@@ -18,6 +18,9 @@
 
   <div id="toast" class="toast"></div>
 
+  <!-- Sunday: shown only for an account connected to Sunday (popup.js initSunday) -->
+  <div id="sundayLine" style="display:none;margin:4px 16px 0;padding:8px 10px;border-radius:6px;font-size:12px;line-height:1.45;border:1px solid #1f4d33;background:#0d1f14;color:#b8e6c9;"></div>
+
   <!-- Login View -->
   <div class="form-section" id="loginView" style="display:none">
     <button class="btn btn-primary" id="githubLoginBtn" style="display:none;background:#24292f;margin-bottom:12px;">Sign in with GitHub</button>
@@ -121,6 +124,7 @@
       <textarea id="notes" placeholder="Key insights, things to remember..."></textarea>
     </div>
 
+    <p id="sundayOwnPick" style="display:none;font-size:12px;color:#e6d6b8;margin:0 0 8px;"></p>
     <button class="btn btn-primary" id="finishBtn" disabled>Save & Finish</button>
     <a href="#" class="discard-link" id="discardLink">Discard this attempt</a>
   </div>
