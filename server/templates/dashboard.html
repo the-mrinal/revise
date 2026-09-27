@@ -148,6 +148,7 @@
   .tag-medium { background: #78350f; color: #fbbf24; }
   .tag-hard { background: #4c1d1d; color: #fca5a5; }
   .tag-platform { background: #1e1b4b; color: #a5b4fc; }
+  .tag-sunday { background: #0f2e1d; color: #7ddc9d; text-transform: none; white-space: nowrap; }
 
   .stars { color: #f4c542; letter-spacing: 1px; }
   .delete-btn { background: none; border: none; color: #666; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
@@ -571,6 +572,7 @@
           <th data-sort="time_taken">Time</th>
           <th data-sort="solved_at">Solved</th>
           <th data-sort="next_review">Next Review</th>
+          <th id="sundayCol" hidden>Sunday</th>
           <th></th>
           <th></th>
         </tr>
@@ -1527,8 +1529,11 @@ function renderTable() {
     return String(va).localeCompare(String(vb)) * sortDir;
   });
 
+  // Items carry `sunday` only while the account is connected to Sunday.
+  const linked = allQuestions.some(q => q.sunday);
+  document.getElementById("sundayCol").hidden = !linked;
   const tbody = document.getElementById("tableBody");
-  if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="10" class="empty">No questions found</td></tr>'; return; }
+  if (!filtered.length) { tbody.innerHTML = `<tr><td colspan="${linked ? 11 : 10}" class="empty">No questions found</td></tr>`; return; }
 
   tbody.innerHTML = filtered.map(q => `<tr>
     <td><a href="${esc(q.url)}" target="_blank">${esc(q.title || q.url)}</a></td>
@@ -1538,10 +1543,20 @@ function renderTable() {
     <td>${(q.attempts||1) > 1 ? '×'+q.attempts : ''}</td>
     <td>${q.time_taken ? q.time_taken+'m' : '—'}</td>
     <td>${q.solved_at ? new Date(q.solved_at).toLocaleDateString() : '—'}</td>
-    <td>${q.next_review || '—'}</td>
+    <td>${q.next_review || '—'}</td>${linked ? `
+    <td>${sundayPlace(q.sunday)}</td>` : ''}
     <td>${historyBtn(q.id)}<button class="edit-btn" onclick="openEdit(${q.id})">Edit</button></td>
     <td><button class="delete-btn" onclick="deleteQ(${q.id})">✕</button></td>
   </tr>`).join('');
+}
+
+// Where Sunday put this item's newest save (the All items Sunday column).
+function sundayPlace(s) {
+  const p = s && s.placed;
+  if (p === 'week') return `<span class="tag tag-sunday">week ${esc(String(s.week))}${s.module != null ? ' › ' + esc(String(s.module)) : ''}</span>`;
+  if (p === 'own') return `<span class="tag tag-sunday">own pick · week ${esc(String(s.week))}</span>`;
+  const quiet = { skipped: 'not added to Sunday', sending: 'sending…' }[p] || 'saved before connecting';
+  return `<span style="color:var(--muted);font-size:12px;">${quiet}</span>`;
 }
 
 async function deleteQ(id) {
