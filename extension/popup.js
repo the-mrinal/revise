@@ -129,6 +129,21 @@ async function initAuth() {
   showResyncBtn();
 }
 
+// --- Sign in with GitHub: happens on the website; the dashboard's content
+// script (capture-tokens.js) then copies the session into the extension. ---
+document.getElementById("githubLoginBtn").addEventListener("click", () => {
+  chrome.tabs.create({ url: "https://revise.mrinal.dev/api/auth/github/login?next=/dashboard" });
+});
+
+fetch(`${API}/auth/config`)
+  .then((r) => r.json())
+  .then((cfg) => {
+    if (!cfg.github) return;
+    document.getElementById("githubLoginBtn").style.display = "block";
+    document.getElementById("loginOr").style.display = "block";
+  })
+  .catch(() => {});
+
 // --- Send magic link ---
 document.getElementById("sendMagicLinkBtn").addEventListener("click", async () => {
   const email = document.getElementById("loginEmail").value.trim();

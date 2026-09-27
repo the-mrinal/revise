@@ -14,6 +14,8 @@ services:
       # "local". Required, so a deploy can never silently start on an empty
       # database (compose refuses before touching the running container).
       - DB_TARGET=${DB_TARGET:?set DB_TARGET in .env (supabase until the cutover, then local)}
+      # Signs the sessions Revise issues. Required: without it nobody could sign in.
+      - REVISE_JWT_SECRET=${REVISE_JWT_SECRET:?set REVISE_JWT_SECRET in .env (openssl rand -hex 32)}
       - AVATAR_DIR=/data/avatars
       - CUTOVER_DIR=/data/cutover
     volumes:

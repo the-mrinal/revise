@@ -1,6 +1,7 @@
 """FastAPI server for Revise."""
 
-import json
+import html
+import secrets
 import os
 import re
 from contextlib import asynccontextmanager
@@ -10,21 +11,27 @@ from urllib.parse import urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from supabase_auth.errors import AuthApiError
 
 from auth import (
+    SERVER_URL,
+    SessionExpired,
+    end_session,
     exchange_code_for_session,
     get_current_claims,
     get_current_user_id,
-    refresh_session,
+    read_purpose_token,
     send_magic_link,
+    sign_purpose_token,
+    start_session,
     verify_token,
 )
+from auth import refresh as auth_refresh_tokens
 from database import (
     AVATAR_DIR,
     count_revisions_done_today,
@@ -60,8 +67,18 @@ from database import (
     log_access_event,
     merge_duplicates,
     merge_duplicates_for_question,
+    create_user,
+    ensure_user,
+    get_identity_user,
+    get_user,
+    get_user_identity,
+    link_identity,
+    merge_users,
     record_sign_in,
+    refresh_identity,
     revoke_feature,
+    set_avatar_if_missing,
+    users_matching_emails_without,
     set_user_admin,
     update_profile,
     update_question,
@@ -76,8 +93,10 @@ from patterns import (
     get_all_pattern_labels,
     get_pattern_for_url,
 )
+import auth_pages
 import cutover
 import db
+import github_oauth
 import scheduler
 
 
@@ -269,18 +288,43 @@ class GrantByEmail(BaseModel):
     feature: str
 
 
+class MergeUsers(BaseModel):
+    from_email: str
+    into_email: str
+
+
 # --- Auth endpoints (no auth required) ---
+
+
+def _user_agent(request: Request) -> str | None:
+    return request.headers.get("user-agent")
+
+
+@app.get("/api/auth/config")
+def auth_config():
+    """What the sign-in screens should offer."""
+    return {
+        "github": github_oauth.configured(),
+        # GitHub-only accounts need our own database: on Supabase, every
+        # question must belong to a Supabase Auth user.
+        "new_github_accounts": github_oauth.configured() and cutover.current_target() == "local",
+    }
 
 
 @app.post("/api/auth/magic-link")
 def auth_magic_link(req: MagicLinkRequest):
     try:
-        send_magic_link(req.email)
+        send_magic_link(req.email, allow_new_accounts=not github_oauth.configured())
     except AuthApiError as e:
         if e.status == 429:
             raise HTTPException(
                 status_code=429,
                 detail="Too many login attempts — please wait a minute and try again.",
+            )
+        if "signups not allowed" in (e.message or "").lower():
+            raise HTTPException(
+                status_code=404,
+                detail="No Revise account uses this email. New here? Sign in with GitHub.",
             )
         raise HTTPException(status_code=400, detail=e.message)
     except httpx.HTTPStatusError as e:
@@ -295,6 +339,7 @@ def auth_magic_link(req: MagicLinkRequest):
 
 @app.get("/api/auth/callback")
 def auth_callback(
+    request: Request,
     token_hash: str = Query(None),
     type: str = Query(None),
 ):
@@ -317,16 +362,13 @@ def auth_callback(
             )
         try:
             claims = verify_token(tokens["access_token"])
+            ensure_user(claims["sub"], claims.get("email"))
             record_sign_in(claims["sub"], claims.get("email"))
-        except Exception as e:  # bookkeeping must never block a sign-in
-            print(f"[auth] could not record sign-in: {e}")
-        return HTMLResponse(
-            "<script>localStorage.setItem('auth', "
-            + json.dumps(json.dumps(
-                {"access_token": tokens["access_token"], "refresh_token": tokens["refresh_token"]}
-            ))
-            + "); location.replace('/dashboard');</script>"
-        )
+            # Hand out a Revise session rather than the Supabase one.
+            tokens = start_session(claims["sub"], claims.get("email"), _user_agent(request))
+        except Exception as e:  # the Supabase session still works (and bridges later)
+            print(f"[auth] could not start a Revise session: {e}")
+        return auth_pages.signed_in(tokens, "/dashboard")
 
     # Implicit flow: Supabase sends tokens in the URL fragment (#access_token=...)
     # Fragments aren't sent to the server, so an inline script moves them to
@@ -349,16 +391,163 @@ def auth_callback(
 
 
 @app.post("/api/auth/refresh")
-def auth_refresh(req: RefreshRequest):
+def auth_refresh(req: RefreshRequest, request: Request):
     try:
-        return refresh_session(req.refresh_token)
-    except AuthApiError as e:
-        # Invalid / already-used / revoked refresh token. 401 tells clients the
-        # session is dead (sign in again) — a 500 here reads as transient and
-        # sends them into a retry loop.
-        raise HTTPException(status_code=401, detail=f"Session expired: {e.message}")
-    except httpx.HTTPStatusError:
-        raise HTTPException(status_code=502, detail="Auth service error — please try again.")
+        return auth_refresh_tokens(req.refresh_token, _user_agent(request))
+    except SessionExpired as e:
+        # Unknown / revoked / expired. 401 tells clients the session is dead
+        # (sign in again) — a 500 here reads as transient and sends them into
+        # a retry loop.
+        raise HTTPException(status_code=401, detail=f"Session expired: {e}")
+
+
+@app.post("/api/auth/logout")
+def auth_logout(req: RefreshRequest):
+    end_session(req.refresh_token)
+    return {"ok": True}
+
+
+# --- Sign in with GitHub ---
+
+GITHUB_STATE_COOKIE = "revise_github_state"
+GITHUB_COOKIE_PATH = "/api/auth/github"
+
+
+def _github_redirect_uri() -> str:
+    return f"{SERVER_URL}/api/auth/github/callback"
+
+
+@app.get("/api/auth/github/login")
+def github_login(next: str = Query("/dashboard"), link: str = Query(None)):
+    """Start signing in with GitHub, or (with a link token from
+    /api/auth/github/link) connect GitHub to the signed-in account."""
+    if not github_oauth.configured():
+        return auth_pages.message("GitHub sign-in isn't set up yet", "Use the email link for now.", 503)
+    link_sub = None
+    if link:
+        claims = read_purpose_token(link, "github-link")
+        if not claims:
+            return auth_pages.message("That link has expired", "Go back to Revise and click Connect GitHub again.")
+        link_sub = claims["sub"]
+    state = secrets.token_urlsafe(24)
+    resp = RedirectResponse(github_oauth.authorize_url(_github_redirect_uri(), state), status_code=302)
+    resp.set_cookie(
+        GITHUB_STATE_COOKIE,
+        sign_purpose_token({"state": state, "next": auth_pages.safe_next(next), "link_sub": link_sub},
+                           "github-state", 600),
+        max_age=600, httponly=True, secure=SERVER_URL.startswith("https://"),
+        samesite="lax", path=GITHUB_COOKIE_PATH,
+    )
+    return resp
+
+
+def _finish_github_sign_in(request: Request, user_id: str, account: dict, next_path: str, outcome: str):
+    record_sign_in(user_id, None)
+    if account.get("avatar_url"):
+        set_avatar_if_missing(user_id, account["avatar_url"])
+    email = (get_user(user_id) or {}).get("email")
+    tokens = start_session(user_id, email, _user_agent(request))
+    return auth_pages.signed_in(tokens, auth_pages.with_param(next_path, "github", outcome))
+
+
+@app.get("/api/auth/github/callback")
+def github_callback(request: Request, code: str = Query(None), state: str = Query(None),
+                    error: str = Query(None)):
+    cookie = read_purpose_token(request.cookies.get(GITHUB_STATE_COOKIE, ""), "github-state")
+    if error:
+        resp = auth_pages.message("GitHub sign-in was cancelled", "Nothing changed.", 400)
+    elif not cookie or not code or not state or not secrets.compare_digest(state, cookie["state"]):
+        resp = auth_pages.message("That sign-in attempt expired", "Please try signing in again.", 400)
+    else:
+        resp = _github_callback(request, code, cookie)
+    resp.delete_cookie(GITHUB_STATE_COOKIE, path=GITHUB_COOKIE_PATH)
+    return resp
+
+
+def _github_callback(request: Request, code: str, cookie: dict):
+    next_path, link_sub = cookie["next"], cookie.get("link_sub")
+    try:
+        account = github_oauth.fetch_account(github_oauth.exchange_code(code, _github_redirect_uri()))
+    except (github_oauth.GitHubError, httpx.HTTPError) as e:
+        print(f"[github] sign-in failed: {e}")
+        return auth_pages.message("GitHub didn't respond as expected", "Please try again in a minute.", 502)
+    primary_email = account["emails"][0] if account["emails"] else None
+    linked_to = get_identity_user("github", account["id"])
+
+    if link_sub:  # Connect GitHub, from a signed-in account
+        if linked_to and linked_to != link_sub:
+            return auth_pages.message(
+                "That GitHub account is already in use",
+                f"@{account['login']} is connected to a different Revise account.",
+            )
+        existing = get_user_identity(link_sub, "github")
+        if not linked_to and existing:
+            return auth_pages.message(
+                "Already connected",
+                f"This Revise account is connected to GitHub @{existing['login']} already.",
+            )
+        if not linked_to:
+            link_identity(link_sub, "github", account["id"], account["login"], primary_email)
+        return _finish_github_sign_in(request, link_sub, account, next_path, "linked")
+
+    if linked_to:  # a returning GitHub user
+        refresh_identity("github", account["id"], account["login"], primary_email)
+        return _finish_github_sign_in(request, linked_to, account, next_path, "signed-in")
+
+    # First GitHub sign-in: an existing account with one of their verified
+    # emails is theirs; connect it.
+    matches = users_matching_emails_without("github", account["emails"])
+    if len(matches) == 1:
+        link_identity(matches[0], "github", account["id"], account["login"], primary_email)
+        return _finish_github_sign_in(request, matches[0], account, next_path, "connected")
+
+    # Nobody matches: ask before creating a new, empty account.
+    pending = sign_purpose_token(
+        {"github": {k: account[k] for k in ("id", "login", "avatar_url")},
+         "email": primary_email, "next": next_path},
+        "github-pending", 900,
+    )
+    new_allowed = cutover.current_target() == "local"
+    create = (
+        f"<form method=post action='/api/auth/github/complete'>"
+        f"<input type=hidden name=pending value='{html.escape(pending)}'>"
+        f"<button class=primary {'' if new_allowed else 'disabled'}>Create a new Revise account</button></form>"
+    )
+    if not new_allowed:
+        create += "<p class=note>New accounts open in a few days, after a short upgrade.</p>"
+    login = html.escape(account["login"] or "")
+    return auth_pages.page(
+        "New to Revise?",
+        f"<p>No Revise account matches GitHub @{login} or its verified emails.</p>"
+        "<p>If you already use Revise with another email, sign in with that email's link first, "
+        "then choose <b>Connect GitHub</b>. Your questions stay in one account.</p>"
+        "<a class=secondary href='/dashboard?signin=email'>I already have an account</a>" + create,
+    )
+
+
+@app.post("/api/auth/github/complete")
+def github_complete(request: Request, pending: str = Form(...)):
+    """Create the account the 'New to Revise?' page offered."""
+    claims = read_purpose_token(pending, "github-pending")
+    if not claims:
+        return auth_pages.message("That page expired", "Please sign in with GitHub again.")
+    account = claims["github"]
+    user_id = get_identity_user("github", account["id"])
+    if not user_id:  # not created meanwhile (e.g. a double click)
+        if cutover.current_target() != "local":
+            return auth_pages.message("New accounts open soon", "Please try again in a few days.", 503)
+        user_id = create_user(claims.get("email"), "github")
+        link_identity(user_id, "github", account["id"], account["login"], claims.get("email"))
+    return _finish_github_sign_in(request, user_id, account, auth_pages.safe_next(claims.get("next")), "new")
+
+
+@app.post("/api/auth/github/link")
+def github_link(claims: dict = Depends(get_current_claims)):
+    """Where to send the browser to connect GitHub to this account."""
+    if not github_oauth.configured():
+        raise HTTPException(503, "GitHub sign-in isn't set up yet")
+    token = sign_purpose_token({"sub": claims["sub"]}, "github-link", 300)
+    return {"url": f"/api/auth/github/login?next=/dashboard&link={token}"}
 
 
 # --- Identity & access ---
@@ -371,11 +560,16 @@ def me(claims: dict = Depends(get_current_claims)):
     user_id = claims["sub"]
     email = claims.get("email")
     ensure_user_profile(user_id, email)
+    github = get_user_identity(user_id, "github")
     return {
         "user_id": user_id,
         "email": email,
         "is_admin": is_user_admin(user_id),
         "features": get_user_features(user_id),
+        "github": {
+            "available": github_oauth.configured(),
+            "login": github["login"] if github else None,
+        },
     }
 
 
@@ -507,6 +701,22 @@ def admin_grant_by_email(body: GrantByEmail, claims: dict = Depends(require_admi
         "grant", feature=body.feature, target_email=user["email"],
     )
     return {"ok": True, "user_id": user["user_id"], "email": user["email"]}
+
+
+@app.post("/api/admin/merge-users")
+def admin_merge_users(body: MergeUsers, claims: dict = Depends(require_admin)):
+    """Fold a duplicate account (from) into the one to keep (into)."""
+    source, target = find_user_by_email(body.from_email), find_user_by_email(body.into_email)
+    if not source or not target:
+        raise HTTPException(404, "Both emails must belong to existing accounts")
+    if source["user_id"] == target["user_id"]:
+        raise HTTPException(400, "Those are the same account")
+    moved = merge_users(source["user_id"], target["user_id"])
+    log_access_event(
+        claims["sub"], claims.get("email"), target["user_id"], "merge",
+        feature=f"from {source['email']}", target_email=target["email"],
+    )
+    return {"ok": True, "moved": moved, "into": target}
 
 
 # --- Protected API endpoints ---

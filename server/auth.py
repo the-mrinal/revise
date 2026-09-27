@@ -1,6 +1,24 @@
-"""Authentication module — Supabase Magic Link auth via FastAPI."""
+"""Authentication: Revise's own sessions, plus the Supabase pieces still in use.
 
+Revise issues its own tokens, in the same shape clients already store:
+  access_token   a JWT (HS256, iss "revise", aud "authenticated") carrying
+                 sub = the user's id and email; valid for an hour
+  refresh_token  "rv_" + random; only its SHA-256 is stored (sessions table);
+                 valid for 180 days after its last use, and not rotated, since
+                 the dashboard and the extension share one copy
+
+Supabase tokens stay valid while Supabase Auth is still around: access tokens
+until they expire, and a Supabase refresh token is exchanged once, through
+Supabase, for a Revise session (the "bridge"). The exchange is remembered, so
+the second holder of a shared token gets a Revise session too instead of
+tripping Supabase's reuse detection.
+"""
+
+import hashlib
 import os
+import secrets
+import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import HTTPException, Security
@@ -8,6 +26,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from supabase import create_client
 
+import database
 from database import ensure_user
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -15,6 +34,14 @@ SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_JWT_SECRET = os.environ["SUPABASE_JWT_SECRET"]
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8765")
+REVISE_JWT_SECRET = os.environ["REVISE_JWT_SECRET"]
+if len(REVISE_JWT_SECRET) < 32:
+    raise RuntimeError("REVISE_JWT_SECRET must be at least 32 characters")
+
+ISSUER = "revise"
+ACCESS_TOKEN_SECONDS = 3600
+SESSION_DAYS = 180
+REFRESH_PREFIX = "rv_"
 
 security = HTTPBearer()
 
@@ -46,9 +73,91 @@ def get_jwks():
     return _jwks
 
 
-def verify_token(token: str) -> dict:
-    """Decode and verify a Supabase JWT. Returns the payload."""
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def mint_access_token(user_id: str, email: str | None) -> str:
+    now = int(time.time())
+    claims = {"iss": ISSUER, "aud": "authenticated", "sub": user_id,
+              "iat": now, "exp": now + ACCESS_TOKEN_SECONDS}
+    if email:
+        claims["email"] = email
+    return jwt.encode(claims, REVISE_JWT_SECRET, algorithm="HS256")
+
+
+def _session_expiry() -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat()
+
+
+def start_session(user_id: str, email: str | None, user_agent: str | None = None) -> dict:
+    """A new Revise session: {access_token, refresh_token}."""
+    refresh_token = REFRESH_PREFIX + secrets.token_urlsafe(32)
+    database.insert_session(token_hash(refresh_token), user_id, _session_expiry(), user_agent)
+    return {"access_token": mint_access_token(user_id, email), "refresh_token": refresh_token}
+
+
+class SessionExpired(Exception):
+    pass
+
+
+def refresh(refresh_token: str, user_agent: str | None = None) -> dict:
+    """New tokens for a refresh token: a Revise one, or a Supabase one (which
+    becomes a Revise session). Raises SessionExpired when it's dead."""
+    if refresh_token.startswith(REFRESH_PREFIX):
+        row = database.use_session(token_hash(refresh_token), _session_expiry())
+        if not row:
+            raise SessionExpired("session ended or unknown")
+        user = database.get_user(row["user_id"]) or {}
+        return {"access_token": mint_access_token(row["user_id"], user.get("email")),
+                "refresh_token": refresh_token}
+
+    legacy_hash = token_hash(refresh_token)
+    row = database.use_legacy_token(legacy_hash)
+    if row:
+        user_id = row["user_id"]
+        email = (database.get_user(user_id) or {}).get("email")
+    else:
+        try:
+            supa = refresh_session(refresh_token)  # the bridge: once per token
+        except Exception as e:
+            raise SessionExpired(str(e)) from e
+        claims = verify_token(supa["access_token"])
+        user_id, email = claims["sub"], claims.get("email")
+        ensure_user(user_id, email)
+        database.remember_legacy_token(legacy_hash, user_id, "bridge")
+    return start_session(user_id, email, user_agent)
+
+
+def end_session(refresh_token: str) -> None:
+    if refresh_token.startswith(REFRESH_PREFIX):
+        database.revoke_session(token_hash(refresh_token))
+    else:
+        database.revoke_legacy_token(token_hash(refresh_token))
+
+
+def sign_purpose_token(claims: dict, purpose: str, seconds: int) -> str:
+    """A short-lived signed token for one step of a flow (e.g. linking
+    GitHub). Its audience keeps it from ever passing as an access token."""
+    now = int(time.time())
+    return jwt.encode({**claims, "iss": ISSUER, "aud": purpose, "iat": now, "exp": now + seconds},
+                      REVISE_JWT_SECRET, algorithm="HS256")
+
+
+def read_purpose_token(token: str, purpose: str) -> dict | None:
     try:
+        return jwt.decode(token, REVISE_JWT_SECRET, algorithms=["HS256"],
+                          audience=purpose, issuer=ISSUER)
+    except JWTError:
+        return None
+
+
+def verify_token(token: str) -> dict:
+    """Verify an access token (Revise's or Supabase's). Returns the payload."""
+    try:
+        if jwt.get_unverified_claims(token).get("iss") == ISSUER:
+            return jwt.decode(token, REVISE_JWT_SECRET, algorithms=["HS256"],
+                              audience="authenticated", issuer=ISSUER)
         # Try ES256 first (newer Supabase projects)
         header = jwt.get_unverified_header(token)
         if header.get("alg") == "ES256":
@@ -91,11 +200,15 @@ def get_current_user_id(
     return get_current_claims(credentials)["sub"]
 
 
-def send_magic_link(email: str) -> None:
-    """Send a magic link email via Supabase Auth OTP."""
+def send_magic_link(email: str, allow_new_accounts: bool = True) -> None:
+    """Send a magic link email via Supabase Auth OTP. With GitHub sign-in
+    available, links go to existing accounts only; new people use GitHub."""
     client = get_anon_client()
     client.auth.sign_in_with_otp(
-        {"email": email, "options": {"email_redirect_to": f"{SERVER_URL}/api/auth/callback"}}
+        {"email": email, "options": {
+            "email_redirect_to": f"{SERVER_URL}/api/auth/callback",
+            "should_create_user": allow_new_accounts,
+        }}
     )
 
 

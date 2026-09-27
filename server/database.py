@@ -1019,3 +1019,171 @@ def get_user_activity(user_id: str) -> dict:
             for r in recent
         ],
     }
+
+
+# --- Sign-in: Revise sessions, linked GitHub accounts, bridged Supabase tokens ---
+
+
+def get_user(user_id: str) -> dict | None:
+    return db.fetch_one("SELECT id, email, created_at, source FROM users WHERE id = %s", (user_id,))
+
+
+def create_user(email: str | None, source: str) -> str:
+    """A brand-new account (e.g. first GitHub sign-in). Returns its id."""
+    return db.fetch_one(
+        "INSERT INTO users (id, email, source) VALUES (gen_random_uuid(), %s, %s) RETURNING id",
+        (email, source),
+    )["id"]
+
+
+def insert_session(session_hash: str, user_id: str, expires_at: str, user_agent: str | None) -> None:
+    db.insert(
+        "sessions",
+        {"id": session_hash, "user_id": user_id, "expires_at": expires_at,
+         "user_agent": (user_agent or "")[:300] or None},
+        returning="id",
+    )
+
+
+def use_session(session_hash: str, new_expiry: str) -> dict | None:
+    """Look up a live session and slide its expiry. None if unknown, revoked
+    or expired."""
+    return db.fetch_one(
+        "UPDATE sessions SET last_used_at = now(), expires_at = %s "
+        "WHERE id = %s AND revoked_at IS NULL AND expires_at > now() "
+        "RETURNING user_id",
+        (new_expiry, session_hash),
+    )
+
+
+def revoke_session(session_hash: str) -> None:
+    db.execute(
+        "UPDATE sessions SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL",
+        (session_hash,),
+    )
+
+
+def use_legacy_token(token_hash: str) -> dict | None:
+    """A Supabase refresh token we've already exchanged (or imported)."""
+    return db.fetch_one(
+        "UPDATE legacy_refresh_tokens SET last_used_at = now() "
+        "WHERE token_hash = %s AND revoked_at IS NULL RETURNING user_id",
+        (token_hash,),
+    )
+
+
+def remember_legacy_token(token_hash: str, user_id: str, source: str) -> None:
+    db.execute(
+        "INSERT INTO legacy_refresh_tokens (token_hash, user_id, source, last_used_at) "
+        "VALUES (%s, %s, %s, now()) ON CONFLICT (token_hash) DO NOTHING",
+        (token_hash, user_id, source),
+    )
+
+
+def revoke_legacy_token(token_hash: str) -> None:
+    db.execute(
+        "UPDATE legacy_refresh_tokens SET revoked_at = now() "
+        "WHERE token_hash = %s AND revoked_at IS NULL",
+        (token_hash,),
+    )
+
+
+def get_identity_user(provider: str, provider_user_id: str) -> str | None:
+    row = db.fetch_one(
+        "SELECT user_id FROM user_identities WHERE provider = %s AND provider_user_id = %s",
+        (provider, provider_user_id),
+    )
+    return row["user_id"] if row else None
+
+
+def get_user_identity(user_id: str, provider: str) -> dict | None:
+    return db.fetch_one(
+        "SELECT provider_user_id, login, email, linked_at FROM user_identities "
+        "WHERE user_id = %s AND provider = %s",
+        (user_id, provider),
+    )
+
+
+def link_identity(user_id: str, provider: str, provider_user_id: str,
+                  login: str | None, email: str | None) -> None:
+    db.execute(
+        "INSERT INTO user_identities (user_id, provider, provider_user_id, login, email) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        (user_id, provider, provider_user_id, login, email),
+    )
+
+
+def refresh_identity(provider: str, provider_user_id: str, login: str | None, email: str | None) -> None:
+    """Usernames and emails change on GitHub; the numeric id doesn't."""
+    db.execute(
+        "UPDATE user_identities SET login = %s, email = COALESCE(%s, email) "
+        "WHERE provider = %s AND provider_user_id = %s",
+        (login, email, provider, provider_user_id),
+    )
+
+
+def users_matching_emails_without(provider: str, emails: list[str]) -> list[str]:
+    """Ids of users whose email is one of `emails` and who have no identity
+    from `provider` linked yet."""
+    if not emails:
+        return []
+    rows = db.fetch_all(
+        "SELECT u.id FROM users u WHERE lower(u.email) = ANY(%s) AND NOT EXISTS ("
+        " SELECT 1 FROM user_identities i WHERE i.user_id = u.id AND i.provider = %s)",
+        ([e.strip().lower() for e in emails], provider),
+    )
+    return [r["id"] for r in rows]
+
+
+def set_avatar_if_missing(user_id: str, avatar_url: str) -> None:
+    db.execute(
+        "INSERT INTO user_profiles (user_id, avatar_url) VALUES (%s, %s) "
+        "ON CONFLICT (user_id) DO UPDATE SET avatar_url = EXCLUDED.avatar_url "
+        "WHERE user_profiles.avatar_url IS NULL",
+        (user_id, avatar_url),
+    )
+
+
+def merge_users(from_id: str, into_id: str) -> dict:
+    """Move everything one account owns into another, then delete the first.
+
+    For someone who ended up with two accounts (say, a new one from signing
+    in with GitHub under a different email). Settings, profile and platforms
+    already set on the surviving account win; the rest moves over. All in
+    one transaction."""
+    if from_id == into_id:
+        raise ValueError("Can't merge an account into itself")
+    moved = {}
+    with db.get_pool().connection() as conn, conn.transaction():
+        for table in ("questions", "question_events", "sessions", "legacy_refresh_tokens"):
+            cur = conn.execute(
+                f"UPDATE {table} SET user_id = %s WHERE user_id = %s", (into_id, from_id)
+            )
+            moved[table] = cur.rowcount
+        moved["user_platforms"] = conn.execute(
+            "UPDATE user_platforms f SET user_id = %s WHERE f.user_id = %s AND NOT EXISTS ("
+            " SELECT 1 FROM user_platforms t WHERE t.user_id = %s AND t.name = f.name)",
+            (into_id, from_id, into_id),
+        ).rowcount
+        moved["feature_access"] = conn.execute(
+            "INSERT INTO feature_access (user_id, feature) SELECT %s, feature FROM feature_access "
+            "WHERE user_id = %s ON CONFLICT (user_id, feature) DO NOTHING",
+            (into_id, from_id),
+        ).rowcount
+        for table in ("user_settings", "user_profiles"):
+            moved[table] = conn.execute(
+                f"UPDATE {table} SET user_id = %s WHERE user_id = %s AND NOT EXISTS ("
+                f" SELECT 1 FROM {table} WHERE user_id = %s)",
+                (into_id, from_id, into_id),
+            ).rowcount
+        # An identity moves only if the surviving account has none from that provider.
+        moved["user_identities"] = conn.execute(
+            "UPDATE user_identities f SET user_id = %s WHERE f.user_id = %s AND NOT EXISTS ("
+            " SELECT 1 FROM user_identities t WHERE t.user_id = %s AND t.provider = f.provider)",
+            (into_id, from_id, into_id),
+        ).rowcount
+        # Whatever didn't move (duplicates) goes with the old account.
+        if conn.execute("DELETE FROM users WHERE id = %s", (from_id,)).rowcount != 1:
+            raise ValueError("The account to merge from doesn't exist")
+    _known_users.clear()
+    return moved

@@ -32,6 +32,9 @@ import db
 # Parents before children, so foreign keys hold at every step.
 TABLES = [
     "users",
+    "user_identities",
+    "sessions",
+    "legacy_refresh_tokens",
     "questions",
     "question_events",
     "user_settings",
@@ -40,7 +43,8 @@ TABLES = [
     "feature_access",
     "access_audit",
 ]
-PRIMARY_KEYS = {"user_settings": "user_id", "user_profiles": "user_id", "users": "id"}
+PRIMARY_KEYS = {"user_settings": "user_id", "user_profiles": "user_id", "users": "id",
+                "sessions": "id", "legacy_refresh_tokens": "token_hash"}
 
 SESSION = "-c timezone=UTC -c datestyle=ISO,YMD -c extra_float_digits=1"
 

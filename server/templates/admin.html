@@ -149,7 +149,22 @@
     </div>
     <div class="msg" id="grant-msg"></div>
     <div class="sub" style="margin-top:8px;color:var(--text-muted);font-size:12px">
-      The person must have signed in at least once (magic link) so their account exists.
+      The person must have signed in at least once (email link or GitHub) so their account exists.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Merge two accounts</h2>
+    <div class="grant-row">
+      <input type="email" id="merge-from" placeholder="duplicate account's email" autocomplete="off">
+      <input type="email" id="merge-into" placeholder="account to keep" autocomplete="off">
+      <button class="primary" id="merge-btn" onclick="mergeAccounts()">Merge</button>
+    </div>
+    <div class="msg" id="merge-msg"></div>
+    <div class="sub" style="margin-top:8px;color:var(--text-muted);font-size:12px">
+      For someone who ended up with two accounts, e.g. a new one from GitHub under a different email.
+      Everything moves into the account to keep (its own settings and profile win), then the duplicate is deleted.
+      Click Merge twice to confirm.
     </div>
   </div>
 
@@ -297,10 +312,10 @@ function fmtDateTime(s) {
 
 const ACTION_LABEL = {
   grant: 'granted', revoke: 'revoked',
-  make_admin: 'made admin', remove_admin: 'removed admin',
+  make_admin: 'made admin', remove_admin: 'removed admin', merge: 'merged',
 };
 const ACTION_CLASS = {
-  grant: 'a-grant', revoke: 'a-revoke', make_admin: 'a-grant', remove_admin: 'a-revoke',
+  grant: 'a-grant', revoke: 'a-revoke', make_admin: 'a-grant', remove_admin: 'a-revoke', merge: 'a-grant',
 };
 
 function renderAudit(entries) {
@@ -314,7 +329,7 @@ function renderAudit(entries) {
     const cls = ACTION_CLASS[e.action] || '';
     return '<li><span class="dotm ' + cls + '"></span>' +
       '<span class="atxt"><b>' + actor + '</b> ' + verb + feat +
-      (e.action === 'grant' || e.action === 'revoke' ? ' for ' : ' ') +
+      (e.action === 'grant' || e.action === 'revoke' ? ' for ' : e.action === 'merge' ? ' into ' : ' ') +
       '<b>' + target + '</b></span>' +
       '<span class="atime">' + esc(fmtDateTime(e.created_at)) + '</span></li>';
   }).join('') + '</ul>';
@@ -382,6 +397,44 @@ async function grantByEmail() {
     msg.className = 'msg ok';
     msg.textContent = 'Granted “' + featureEl.value + '” to ' + res.email + '.';
     emailEl.value = '';
+    await loadUsers();
+    loadAudit();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+let mergeArmed = '';
+
+async function mergeAccounts() {
+  const from = document.getElementById('merge-from').value.trim();
+  const into = document.getElementById('merge-into').value.trim();
+  const msg = document.getElementById('merge-msg');
+  const btn = document.getElementById('merge-btn');
+  msg.className = 'msg'; msg.textContent = '';
+  if (!from || !into) { msg.className = 'msg err'; msg.textContent = 'Enter both emails.'; return; }
+  // No browser dialogs here: the first click arms, the second merges.
+  const key = from + '→' + into;
+  if (mergeArmed !== key) {
+    mergeArmed = key;
+    msg.className = 'msg err';
+    msg.textContent = 'This deletes ' + from + ' after moving its data into ' + into + '. Click Merge again to confirm.';
+    return;
+  }
+  mergeArmed = '';
+  btn.disabled = true;
+  try {
+    const res = await api('/admin/merge-users', {
+      method: 'POST',
+      body: JSON.stringify({ from_email: from, into_email: into }),
+    });
+    msg.className = 'msg ok';
+    msg.textContent = 'Merged into ' + res.into.email + ': ' + (res.moved.questions || 0) + ' questions moved.';
+    document.getElementById('merge-from').value = '';
+    document.getElementById('merge-into').value = '';
     await loadUsers();
     loadAudit();
   } catch (e) {
