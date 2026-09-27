@@ -2,7 +2,8 @@
 
 Sunday's server calls the two /api/sunday routes with the shared secret
 REVISE_SUNDAY_SECRET: connect (find or make the account, keep Sunday's token,
-answer a 5-minute one-time sign-in link that ends back on Sunday) and unlink.
+answer a 5-minute one-time sign-in link that ends back on Sunday) and unlink
+(by the token's SHA-256 hex, which is all Sunday keeps).
 That secret lets Sunday sign anyone in, so these two routes are the only
 place it is accepted. Without it, or without SUNDAY_URL, every /api/sunday
 route answers 404 and Revise behaves as if Sunday didn't exist.
@@ -14,7 +15,8 @@ For a connected account, each solve or review (and each edit of its notes)
 is put in sunday_outbox, and a background thread sends it to Sunday's
 POST /api/revise/saves, retrying with a growing wait while Sunday is down.
 The save in Revise never waits for Sunday. A 401 from Sunday means Sunday
-has already disconnected, so the link is removed here too.
+has already disconnected, so the link is removed here too. Sunday's answer
+(where it put the save) is kept in sunday_placements for All items.
 """
 
 import hmac
@@ -88,7 +90,24 @@ def save_link(user_id: str, token: str, login: str) -> None:
 
 
 def remove_link_by_token(token: str) -> bool:
-    return db.execute("DELETE FROM sunday_links WHERE sunday_token = %s", (token,)) == 1
+    row = db.fetch_one(
+        "DELETE FROM sunday_links WHERE sunday_token = %s RETURNING user_id", (token,)
+    )
+    if row:
+        _remove_placements(row["user_id"])
+    return row is not None
+
+
+def remove_link_by_token_hash(token_hash: str) -> bool:
+    """Sunday's disconnect: it knows the token only by its SHA-256 hex."""
+    row = db.fetch_one(
+        "DELETE FROM sunday_links "
+        "WHERE encode(sha256(convert_to(sunday_token, 'UTF8')), 'hex') = %s RETURNING user_id",
+        (token_hash.strip().lower(),),
+    )
+    if row:
+        _remove_placements(row["user_id"])
+    return row is not None
 
 
 def remove_link_for_user(user_id: str) -> str | None:
@@ -96,7 +115,12 @@ def remove_link_for_user(user_id: str) -> str | None:
     row = db.fetch_one(
         "DELETE FROM sunday_links WHERE user_id = %s RETURNING sunday_token", (user_id,)
     )
+    _remove_placements(user_id)
     return row["sunday_token"] if row else None
+
+
+def _remove_placements(user_id: str) -> None:
+    db.execute("DELETE FROM sunday_placements WHERE user_id = %s", (user_id,))
 
 
 # --- Sending saves ---
@@ -224,6 +248,7 @@ def send_pending(limit: int = 50) -> int:
         elif r.is_success:
             db.execute("DELETE FROM sunday_outbox WHERE id = %s", (row["id"],))
             sent += 1
+            _save_placement(row["user_id"], row["ref"], r)
         elif r.status_code >= 500 or r.status_code in (408, 429):
             _try_later(row, f"HTTP {r.status_code}")
             break
@@ -231,6 +256,29 @@ def send_pending(limit: int = 50) -> int:
             print(f"[sunday] Sunday refused {row['ref']}: HTTP {r.status_code} {r.text[:200]}")
             db.execute("DELETE FROM sunday_outbox WHERE id = %s", (row["id"],))
     return sent
+
+
+def _save_placement(user_id: str, ref: str, response: httpx.Response) -> None:
+    """Keep where Sunday put this question's save, {placed, week, module},
+    for All items. A reply that doesn't read as that is ignored; the save
+    still counts as sent."""
+    try:
+        answer = response.json()
+        placed = answer["placed"]
+        if placed not in ("week", "own", "skipped"):
+            return
+        week, module = answer.get("week"), answer.get("module")
+        db.execute(
+            "INSERT INTO sunday_placements (user_id, question_id, placed, week, module) "
+            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (user_id, question_id) DO UPDATE SET "
+            "placed = EXCLUDED.placed, week = EXCLUDED.week, module = EXCLUDED.module, "
+            "placed_at = now()",
+            (user_id, int(ref.split(":")[0]), placed,
+             int(week) if week is not None else None,
+             int(module) if module is not None else None),
+        )
+    except Exception as e:
+        print(f"[sunday] could not keep where {ref} went: {e}")
 
 
 def start_sender() -> threading.Thread | None:
@@ -282,7 +330,9 @@ class ConnectIn(BaseModel):
 
 
 class UnlinkIn(BaseModel):
-    token: str = Field(min_length=1)
+    """Sunday keeps only the SHA-256 (hex) of the token, so it sends that."""
+    token_hash: str | None = Field(default=None, min_length=1)
+    token: str | None = Field(default=None, min_length=1)
 
 
 def _find_or_make_user(github_id: str, login: str, email: str) -> str:
@@ -320,7 +370,11 @@ def connect(body: ConnectIn):
 
 @router.post("/api/sunday/unlink", dependencies=[Depends(require_secret)])
 def unlink(body: UnlinkIn):
-    return {"ok": True, "removed": remove_link_by_token(body.token)}
+    if body.token_hash:
+        return {"ok": True, "removed": remove_link_by_token_hash(body.token_hash)}
+    if body.token:
+        return {"ok": True, "removed": remove_link_by_token(body.token)}
+    raise HTTPException(422, "token_hash is required")
 
 
 @router.post("/api/sunday/disconnect", dependencies=[Depends(require_enabled)])

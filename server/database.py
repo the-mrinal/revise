@@ -105,10 +105,43 @@ def insert_question(user_id: str, data: dict) -> dict:
 
 
 def get_all_questions(user_id: str) -> list[dict]:
-    return db.fetch_all(
+    rows = db.fetch_all(
         f"SELECT {COLUMNS} FROM questions WHERE user_id = %s ORDER BY solved_at DESC",
         (user_id,),
     )
+    import sunday  # imports this module, so not at the top
+
+    if rows and sunday.enabled():
+        _add_sunday_placement(user_id, rows)
+    return rows
+
+
+def _add_sunday_placement(user_id: str, rows: list[dict]) -> None:
+    """For an account connected to Sunday only, each item gains `sunday`:
+    {placed: week|own|skipped, week, module} as Sunday answered its newest
+    save; {placed: "sending"} for a save since connecting that Sunday hasn't
+    answered yet; {placed: "before"} when nothing was saved since connecting.
+    An account not connected gets its items exactly as before."""
+    found = db.fetch_all(
+        "SELECT q.id, p.placed, p.week, p.module, EXISTS ("
+        "  SELECT 1 FROM question_events e WHERE e.user_id = q.user_id"
+        "  AND e.question_id = q.id AND e.self_rating IS NOT NULL"
+        "  AND e.created_at >= l.connected_at) AS since_connecting "
+        "FROM questions q JOIN sunday_links l ON l.user_id = q.user_id "
+        "LEFT JOIN sunday_placements p ON p.user_id = q.user_id AND p.question_id = q.id "
+        "WHERE q.user_id = %s",
+        (user_id,),
+    )
+    by_id = {}
+    for f in found:
+        if f["placed"]:
+            by_id[f["id"]] = {"placed": f["placed"], "week": f["week"], "module": f["module"]}
+        else:
+            by_id[f["id"]] = {"placed": "sending" if f["since_connecting"] else "before"}
+    if not by_id:  # not connected
+        return
+    for row in rows:
+        row["sunday"] = by_id.get(row["id"], {"placed": "before"})
 
 
 def get_question(user_id: str, qid: int) -> dict | None:
