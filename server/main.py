@@ -2,6 +2,7 @@
 
 import os
 import re
+from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal, Optional
 from urllib.parse import urlparse, urlunparse
@@ -19,8 +20,10 @@ from auth import (
     get_current_user_id,
     refresh_session,
     send_magic_link,
+    verify_token,
 )
 from database import (
+    AVATAR_DIR,
     count_revisions_done_today,
     decrement_attempts,
     delete_latest_attempt_event,
@@ -54,6 +57,7 @@ from database import (
     log_access_event,
     merge_duplicates,
     merge_duplicates_for_question,
+    record_sign_in,
     revoke_feature,
     set_user_admin,
     update_profile,
@@ -69,9 +73,26 @@ from patterns import (
     get_all_pattern_labels,
     get_pattern_for_url,
 )
+import cutover
+import db
 import scheduler
 
-app = FastAPI(title="Revise")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    watcher = cutover.start_watcher()
+    yield
+    cutover.stop_watcher()
+    if watcher:
+        watcher.join()
+    db.close()
+
+
+app = FastAPI(title="Revise", lifespan=lifespan)
+
+# Holds API requests (instead of failing them) while the database is being
+# switched; see cutover.py.
+app.middleware("http")(cutover.gate)
 
 app.add_middleware(
     CORSMiddleware,
@@ -262,6 +283,11 @@ def auth_callback(
     # PKCE flow: Supabase sends token_hash & type as query params
     if token_hash and type:
         tokens = exchange_code_for_session(token_hash, type)
+        try:
+            claims = verify_token(tokens["access_token"])
+            record_sign_in(claims["sub"], claims.get("email"))
+        except Exception as e:  # bookkeeping must never block a sign-in
+            print(f"[auth] could not record sign-in: {e}")
         redirect_url = (
             f"/dashboard#access_token={tokens['access_token']}"
             f"&refresh_token={tokens['refresh_token']}"
@@ -359,7 +385,7 @@ async def save_avatar(file: UploadFile = File(...), user_id: str = Depends(get_c
         url = upload_avatar(user_id, content, file.content_type, ext)
     except Exception as e:
         print(f"[avatar] upload failed for {user_id}: {e}")
-        raise HTTPException(502, "Avatar upload failed — is the 'avatars' bucket created (migration 006)?")
+        raise HTTPException(502, "Avatar upload failed. Please try again.")
     update_profile(user_id, {"avatar_url": url})
     return {"avatar_url": url}
 
@@ -850,6 +876,10 @@ def flex_stats(user_id: str):
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+# Profile pictures uploaded through /api/profile/avatar
+os.makedirs(AVATAR_DIR, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=AVATAR_DIR), name="avatars")
 
 # Static file serving for research docs (markdown + SVG diagrams)
 # Check Docker path first (research-data/ copied in during build), then local dev path

@@ -32,9 +32,12 @@ jobs:
           echo "--- commits pulled ---"
           git log --oneline "$OLD..$NEW" || true
           echo "--- migration check ---"
-          git diff --name-only "$OLD" "$NEW" -- server/migrations 'server/backfill_*.py' > /tmp/migration_changes.txt || true
+          git diff --name-only "$OLD" "$NEW" -- server/migrations > /tmp/migration_changes.txt || true
           cat /tmp/migration_changes.txt
           docker compose up -d --build
+          echo "--- server startup (migrations) ---"
+          sleep 5
+          docker compose logs --tail 20 server
           EOF
 
       - name: Verify container is running
@@ -63,7 +66,7 @@ jobs:
           {
             echo "## Deploy summary"
             if [ -n "$MIGRATIONS" ]; then
-              echo "### :warning: Migration or backfill files changed — apply them manually against Supabase!"
+              echo "### Migration files changed (applied automatically when the server starts)"
               echo '```'
               echo "$MIGRATIONS"
               echo '```'

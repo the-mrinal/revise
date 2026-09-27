@@ -1,8 +1,5 @@
-"""Database queries for Revise (Postgres via psycopg; see db.py).
-
-Every function returns rows shaped like the Supabase REST API returned them,
-so callers and the browser code are unaffected by the move off Supabase.
-"""
+"""Supabase database queries for Revise — the pre-migration version, kept
+read-only for compare_implementations.py. Delete in Phase 4."""
 
 import os
 import re
@@ -11,27 +8,37 @@ from datetime import date, datetime, timedelta, timezone as dt_timezone
 from urllib.parse import urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
-import db
+from supabase import create_client
 
 # IANA zone used when a user hasn't picked one (or before migration 007).
 DEFAULT_TIMEZONE = "Asia/Kolkata"
 
-# Where avatar images live; served at /avatars/... by main.py.
-AVATAR_DIR = os.environ.get("AVATAR_DIR", "/data/avatars")
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+_client = None
+
+
+def get_client():
+    global _client
+    if _client is None:
+        _client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    return _client
+
 
 COLUMNS = (
-    'id, user_id, url, title, platform, difficulty, self_rating, time_taken, '
-    'notes, solved_at, easiness_factor, "interval", repetitions, next_review, '
-    'last_reviewed, attempts, pattern, question_type, '
-    'approach, mistakes, time_complexity, space_complexity, '
-    'stability, fsrs_difficulty, fsrs_state, solution_source'
+    "id, user_id, url, title, platform, difficulty, self_rating, time_taken, "
+    "notes, solved_at, easiness_factor, interval, repetitions, next_review, "
+    "last_reviewed, attempts, pattern, question_type, "
+    "approach, mistakes, time_complexity, space_complexity, "
+    "stability, fsrs_difficulty, fsrs_state, solution_source"
 )
 
 
 EVENT_COLUMNS = (
-    'id, question_id, event_type, self_rating, time_taken, "interval", '
-    'repetitions, easiness_factor, next_review, reconstructed, created_at, '
-    'solution_source, stability, fsrs_difficulty, fsrs_state'
+    "id, question_id, event_type, self_rating, time_taken, interval, "
+    "repetitions, easiness_factor, next_review, reconstructed, created_at, "
+    "solution_source, stability, fsrs_difficulty, fsrs_state"
 )
 
 # Fields an event may carry beyond the always-present user/question/type.
@@ -42,80 +49,61 @@ _EVENT_FIELDS = (
 )
 
 
-# --- Users ---
-
-# (database target, user_id) pairs already known to exist in users, so the
-# per-request ensure_user check costs one query per user per process.
-_known_users: set[tuple[str | None, str]] = set()
-
-
-def ensure_user(user_id: str, email: str | None = None) -> None:
-    """Make sure the users row exists for an authenticated user.
-
-    Accounts created through Supabase Auth after the users table was filled
-    arrive here on their first API call, before anything that references
-    users(id) is written."""
-    key = (db.current_pool_target(), user_id)
-    if key in _known_users:
-        return
-    db.execute(
-        "INSERT INTO users (id, email) VALUES (%s, %s) "
-        "ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email "
-        "WHERE EXCLUDED.email IS NOT NULL AND users.email IS DISTINCT FROM EXCLUDED.email",
-        (user_id, email),
-    )
-    _known_users.add(key)
-
-
-def record_sign_in(user_id: str, email: str | None = None) -> None:
-    """Note a completed sign-in (shown and sorted on in the admin panel)."""
-    db.execute(
-        "INSERT INTO users (id, email, last_sign_in_at) VALUES (%s, %s, now()) "
-        "ON CONFLICT (id) DO UPDATE SET last_sign_in_at = now(), "
-        "email = COALESCE(EXCLUDED.email, users.email)",
-        (user_id, email),
-    )
-
-
-# --- Questions and their event log ---
-
-
 def insert_event(user_id: str, question_id: int, event_type: str, **fields) -> None:
     """Append a row to the per-question audit log. Best-effort: never raises."""
     try:
+        client = get_client()
         row = {"user_id": user_id, "question_id": question_id, "event_type": event_type}
         for key in _EVENT_FIELDS:
             if fields.get(key) is not None:
                 row[key] = fields[key]
-        db.insert("question_events", row, returning="id")
+        client.table("question_events").insert(row).execute()
     except Exception as e:  # logging must never break a save
         print(f"[events] failed to log {event_type} for q{question_id}: {e}")
 
 
 def get_question_events(user_id: str, qid: int) -> list[dict]:
-    return db.fetch_all(
-        f"SELECT {EVENT_COLUMNS} FROM question_events "
-        "WHERE user_id = %s AND question_id = %s ORDER BY created_at ASC, id ASC",
-        (user_id, qid),
+    client = get_client()
+    result = (
+        client.table("question_events")
+        .select(EVENT_COLUMNS)
+        .eq("user_id", user_id)
+        .eq("question_id", qid)
+        .order("created_at", desc=False)
+        .execute()
     )
+    return result.data
 
 
 def insert_question(user_id: str, data: dict) -> dict:
-    return db.insert("questions", {**data, "user_id": user_id})
+    client = get_client()
+    row = {**data, "user_id": user_id}
+    result = client.table("questions").insert(row).execute()
+    return result.data[0]
 
 
 def get_all_questions(user_id: str) -> list[dict]:
-    return db.fetch_all(
-        f"SELECT {COLUMNS} FROM questions WHERE user_id = %s ORDER BY solved_at DESC, id DESC",
-        (user_id,),
+    client = get_client()
+    result = (
+        client.table("questions")
+        .select(COLUMNS)
+        .eq("user_id", user_id)
+        .order("solved_at", desc=True)
+        .execute()
     )
+    return result.data
 
 
 def get_question(user_id: str, qid: int) -> dict | None:
-    return db.fetch_one(
-        f"SELECT {COLUMNS} FROM questions WHERE user_id = %s AND id = %s",
-        (user_id, qid),
+    client = get_client()
+    result = (
+        client.table("questions")
+        .select(COLUMNS)
+        .eq("user_id", user_id)
+        .eq("id", qid)
+        .execute()
     )
+    return result.data[0] if result.data else None
 
 
 def update_question_schedule(
@@ -130,6 +118,7 @@ def update_question_schedule(
     interval is still written (derived days) for event rows and the history
     UI; easiness_factor/repetitions stay frozen at their pre-FSRS values.
     """
+    client = get_client()
     update_data = {
         "stability": data["stability"],
         "fsrs_difficulty": data["fsrs_difficulty"],
@@ -141,42 +130,31 @@ def update_question_schedule(
         update_data["solution_source"] = solution_source
     if set_reviewed:
         update_data["last_reviewed"] = datetime.utcnow().isoformat()
-    db.update("questions", update_data, {"user_id": user_id, "id": qid}, returning="id")
+    (
+        client.table("questions")
+        .update(update_data)
+        .eq("user_id", user_id)
+        .eq("id", qid)
+        .execute()
+    )
 
 
 def get_revisions_due(
     user_id: str, target_date: str | None = None, limit: int | None = None
 ) -> list[dict]:
     target = target_date or date.today().isoformat()
+    client = get_client()
     query = (
-        f"SELECT {COLUMNS} FROM questions WHERE user_id = %s AND next_review <= %s "
-        "ORDER BY next_review ASC, id ASC"
+        client.table("questions")
+        .select(COLUMNS)
+        .eq("user_id", user_id)
+        .lte("next_review", target)
+        .order("next_review", desc=False)
     )
-    params: tuple = (user_id, target)
     # limit None or <= 0 means "no cap" — surface every due revision.
     if limit and limit > 0:
-        query += " LIMIT %s"
-        params += (limit,)
-    return db.fetch_all(query, params)
-
-
-def _first_solve_days(user_id: str, qids) -> dict[int, str]:
-    """Earliest 'created'/'reviewed' event day (UTC, YYYY-MM-DD) per question."""
-    events = db.fetch_all(
-        "SELECT question_id, created_at FROM question_events "
-        "WHERE user_id = %s AND question_id = ANY(%s) "
-        "AND event_type IN ('created', 'reviewed') ORDER BY created_at ASC",
-        (user_id, list(qids)),
-    )
-    first_day: dict[int, str] = {}
-    for e in events:
-        qid = e["question_id"]
-        day = (e.get("created_at") or "")[:10]
-        if not day:
-            continue
-        if qid not in first_day or day < first_day[qid]:
-            first_day[qid] = day
-    return first_day
+        query = query.limit(limit)
+    return query.execute().data
 
 
 def count_revisions_done_today(user_id: str) -> int:
@@ -190,45 +168,100 @@ def count_revisions_done_today(user_id: str) -> int:
     instead of pulling in a replacement.
     """
     today = date.today().isoformat()
-    reviewed = db.fetch_all(
-        "SELECT question_id FROM question_events "
-        "WHERE user_id = %s AND event_type = 'reviewed' AND created_at >= %s",
-        (user_id, f"{today}T00:00:00"),
-    )
+    client = get_client()
+    reviewed = (
+        client.table("question_events")
+        .select("question_id")
+        .eq("user_id", user_id)
+        .eq("event_type", "reviewed")
+        .gte("created_at", f"{today}T00:00:00")
+        .execute()
+    ).data
     qids = {r["question_id"] for r in reviewed}
     if not qids:
         return 0
     # Find each candidate question's first-ever solve day from the event log.
-    first_day = _first_solve_days(user_id, qids)
+    events = (
+        client.table("question_events")
+        .select("question_id, created_at")
+        .eq("user_id", user_id)
+        .in_("question_id", list(qids))
+        .in_("event_type", ["created", "reviewed"])
+        .order("created_at", desc=False)
+        .execute()
+    ).data
+    first_day: dict[int, str] = {}
+    for e in events:
+        qid = e["question_id"]
+        day = (e.get("created_at") or "")[:10]
+        if not day:
+            continue
+        if qid not in first_day or day < first_day[qid]:
+            first_day[qid] = day
     # Only count questions first solved before today (genuine revisions).
     return sum(1 for qid in qids if first_day.get(qid, today) < today)
 
 
 def update_question(user_id: str, qid: int, data: dict) -> dict | None:
-    rows = db.update("questions", data, {"user_id": user_id, "id": qid})
-    return rows[0] if rows else None
+    client = get_client()
+    result = (
+        client.table("questions")
+        .update(data)
+        .eq("user_id", user_id)
+        .eq("id", qid)
+        .execute()
+    )
+    return result.data[0] if result.data else None
 
 
 def delete_question(user_id: str, qid: int) -> bool:
-    return len(db.delete("questions", {"user_id": user_id, "id": qid})) > 0
+    client = get_client()
+    result = (
+        client.table("questions")
+        .delete()
+        .eq("user_id", user_id)
+        .eq("id", qid)
+        .execute()
+    )
+    return len(result.data) > 0
 
 
 def get_today_activity(user_id: str) -> list[dict]:
     today = date.today().isoformat()
-    since = f"{today}T00:00:00"
-    # Rows where solved_at or last_reviewed is today
-    rows_data = db.fetch_all(
-        f"SELECT {COLUMNS} FROM questions "
-        "WHERE user_id = %s AND (solved_at >= %s OR last_reviewed >= %s)",
-        (user_id, since, since),
+    client = get_client()
+    # Fetch rows where solved_at or last_reviewed is today
+    result = (
+        client.table("questions")
+        .select(COLUMNS)
+        .eq("user_id", user_id)
+        .or_(f"solved_at.gte.{today}T00:00:00,last_reviewed.gte.{today}T00:00:00")
+        .execute()
     )
+    rows_data = result.data
 
     # A question is NEW today only if today is its first-ever solve session.
     # We decide from the audit log: the earliest 'created'/'reviewed' event.
     # The extension logs a 'reviewed' event even on the first solve, so the
     # timestamp alone is unreliable — the event log is the source of truth.
     qids = [r["id"] for r in rows_data]
-    first_event_date = _first_solve_days(user_id, qids) if qids else {}
+    first_event_date: dict[int, str] = {}
+    if qids:
+        events = (
+            client.table("question_events")
+            .select("question_id, created_at")
+            .eq("user_id", user_id)
+            .in_("question_id", qids)
+            .in_("event_type", ["created", "reviewed"])
+            .order("created_at", desc=False)
+            .execute()
+        )
+        for e in events.data:
+            qid = e["question_id"]
+            day = (e.get("created_at") or "")[:10]
+            if not day:
+                continue
+            if qid not in first_event_date or day < first_event_date[qid]:
+                first_event_date[qid] = day
 
     rows = []
     for r in rows_data:
@@ -258,12 +291,17 @@ def get_questions_activity_summary(user_id: str) -> dict:
 
         { qid: {first_solved_on, revision_count, last_revised_at} }
     """
-    events = db.fetch_all(
-        "SELECT question_id, created_at FROM question_events "
-        "WHERE user_id = %s AND event_type IN ('created', 'reviewed') "
-        "ORDER BY created_at ASC",
-        (user_id,),
-    )
+    client = get_client()
+    # TODO: PostgREST caps responses at 1000 rows, so heavy users lose the
+    # oldest events here; paginate like get_activity_heatmap does.
+    events = (
+        client.table("question_events")
+        .select("question_id, created_at")
+        .eq("user_id", user_id)
+        .in_("event_type", ["created", "reviewed"])
+        .order("created_at", desc=False)
+        .execute()
+    ).data
 
     by_q: dict[int, list[str]] = defaultdict(list)
     for e in events:
@@ -326,13 +364,20 @@ def _bucket_event_days(timestamps: list, tz_name: str = DEFAULT_TIMEZONE) -> dic
 
 
 def get_user_timezone(user_id: str) -> str:
-    """The user's IANA timezone, defaulting to IST."""
+    """The user's IANA timezone, defaulting to IST (also pre-migration 007)."""
     try:
-        row = db.fetch_one("SELECT timezone FROM user_profiles WHERE user_id = %s", (user_id,))
-        if row and row.get("timezone"):
-            return row["timezone"]
+        client = get_client()
+        result = (
+            client.table("user_profiles")
+            .select("timezone")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if result.data and result.data[0].get("timezone"):
+            return result.data[0]["timezone"]
     except Exception as e:
-        print(f"[profile] timezone read failed: {e}")
+        print(f"[profile] timezone read failed (run migration 007?): {e}")
     return DEFAULT_TIMEZONE
 
 
@@ -409,45 +454,66 @@ def get_activity_heatmap(user_id: str, days: int = 371) -> dict[str, dict]:
     """
     tz_name = get_user_timezone(user_id)
     zone = _safe_zone(tz_name)
+    client = get_client()
     # One extra day of slack so a UTC cutoff can't clip events that fall
     # inside the window once shifted into a UTC+N zone.
     cutoff = (date.today() - timedelta(days=days + 1)).isoformat()
     pairs: set[tuple[int, str]] = set()  # distinct (question_id, local day)
-    for r in db.fetch_all(
-        "SELECT question_id, created_at FROM question_events "
-        "WHERE user_id = %s AND event_type IN ('created', 'reviewed') AND created_at >= %s "
-        "ORDER BY created_at ASC",
-        (user_id, cutoff),
-    ):
-        day = _to_local_day(r.get("created_at"), zone)
-        if day and r.get("question_id") is not None:
-            pairs.add((r["question_id"], day))
+    start, page = 0, 1000  # PostgREST silently truncates at 1000 rows/request
+    while True:
+        rows = (
+            client.table("question_events")
+            .select("question_id, created_at")
+            .eq("user_id", user_id)
+            .in_("event_type", ["created", "reviewed"])
+            .gte("created_at", cutoff)
+            .order("created_at", desc=False)
+            .range(start, start + page - 1)
+            .execute()
+        ).data
+        for r in rows:
+            day = _to_local_day(r.get("created_at"), zone)
+            if day and r.get("question_id") is not None:
+                pairs.add((r["question_id"], day))
+        if len(rows) < page:
+            break
+        start += page
     if not pairs:
         return {}
 
     # First-ever solve day and difficulty per involved question. The 'created'
     # event is written once at first solve and may predate the window, so it's
     # fetched by question id, not by date; rows older than the event log fall
-    # back to solved_at.
+    # back to solved_at. Chunked so the id list stays within URL limits.
     qids = sorted({qid for qid, _ in pairs})
     first_day: dict[int, str] = {}
     difficulty_by_qid: dict[int, str | None] = {}
     solved_at_by_qid: dict[int, str | None] = {}
-    for r in db.fetch_all(
-        "SELECT question_id, created_at FROM question_events "
-        "WHERE user_id = %s AND event_type = 'created' AND question_id = ANY(%s)",
-        (user_id, qids),
-    ):
-        day = _to_local_day(r.get("created_at"), zone)
-        qid = r["question_id"]
-        if day and (qid not in first_day or day < first_day[qid]):
-            first_day[qid] = day
-    for r in db.fetch_all(
-        "SELECT id, difficulty, solved_at FROM questions WHERE user_id = %s AND id = ANY(%s)",
-        (user_id, qids),
-    ):
-        difficulty_by_qid[r["id"]] = r.get("difficulty")
-        solved_at_by_qid[r["id"]] = r.get("solved_at")
+    for i in range(0, len(qids), 150):
+        chunk = qids[i : i + 150]
+        created = (
+            client.table("question_events")
+            .select("question_id, created_at")
+            .eq("user_id", user_id)
+            .eq("event_type", "created")
+            .in_("question_id", chunk)
+            .execute()
+        ).data
+        for r in created:
+            day = _to_local_day(r.get("created_at"), zone)
+            qid = r["question_id"]
+            if day and (qid not in first_day or day < first_day[qid]):
+                first_day[qid] = day
+        qrows = (
+            client.table("questions")
+            .select("id, difficulty, solved_at")
+            .eq("user_id", user_id)
+            .in_("id", chunk)
+            .execute()
+        ).data
+        for r in qrows:
+            difficulty_by_qid[r["id"]] = r.get("difficulty")
+            solved_at_by_qid[r["id"]] = r.get("solved_at")
     for qid in qids:
         if qid not in first_day:
             day = _to_local_day(solved_at_by_qid.get(qid), zone)
@@ -458,10 +524,15 @@ def get_activity_heatmap(user_id: str, days: int = 371) -> dict[str, dict]:
 
 
 def find_by_url(user_id: str, url: str) -> dict | None:
-    return db.fetch_one(
-        f"SELECT {COLUMNS} FROM questions WHERE user_id = %s AND url = %s ORDER BY id LIMIT 1",
-        (user_id, url),
+    client = get_client()
+    result = (
+        client.table("questions")
+        .select(COLUMNS)
+        .eq("user_id", user_id)
+        .eq("url", url)
+        .execute()
     )
+    return result.data[0] if result.data else None
 
 
 def increment_attempts(user_id: str, qid: int, title: str | None = None) -> dict:
@@ -489,13 +560,19 @@ def delete_latest_attempt_event(user_id: str, qid: int) -> None:
     """Drop the newest 'attempted' event for a question. Best-effort: the
     counter rollback matters more than the log entry."""
     try:
-        db.execute(
-            "DELETE FROM question_events WHERE id = ("
-            " SELECT id FROM question_events"
-            " WHERE user_id = %s AND question_id = %s AND event_type = 'attempted'"
-            " ORDER BY created_at DESC, id DESC LIMIT 1)",
-            (user_id, qid),
-        )
+        client = get_client()
+        rows = (
+            client.table("question_events")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("question_id", qid)
+            .eq("event_type", "attempted")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        ).data
+        if rows:
+            client.table("question_events").delete().eq("id", rows[0]["id"]).execute()
     except Exception as e:
         print(f"[events] failed to delete attempted event for q{qid}: {e}")
 
@@ -510,7 +587,7 @@ def _normalize_url(url: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, path + "/", "", "", ""))
 
 
-def _merge_url_group(url: str, rows: list[dict]):
+def _merge_url_group(client, url: str, rows: list[dict]):
     """Merge a group of duplicate rows sharing the same normalized URL."""
     if len(rows) < 2:
         return
@@ -531,9 +608,9 @@ def _merge_url_group(url: str, rows: list[dict]):
         "self_rating": most_recent.get("self_rating"),
         "notes": most_recent.get("notes"),
     }
-    db.update("questions", update_data, {"id": keep["id"]}, returning="id")
+    client.table("questions").update(update_data).eq("id", keep["id"]).execute()
     for other in others:
-        db.delete("questions", {"id": other["id"]})
+        client.table("questions").delete().eq("id", other["id"]).execute()
 
 
 def merge_duplicates(user_id: str):
@@ -544,8 +621,9 @@ def merge_duplicates(user_id: str):
         key = _normalize_url(row["url"])
         by_url.setdefault(key, []).append(row)
 
+    client = get_client()
     for url, rows in by_url.items():
-        _merge_url_group(url, rows)
+        _merge_url_group(client, url, rows)
 
 
 def merge_duplicates_for_question(user_id: str, qid: int) -> int | None:
@@ -558,7 +636,8 @@ def merge_duplicates_for_question(user_id: str, qid: int) -> int | None:
     dupes = [r for r in all_rows if _normalize_url(r["url"]) == norm_url]
     if len(dupes) < 2:
         return qid
-    _merge_url_group(norm_url, dupes)
+    client = get_client()
+    _merge_url_group(client, norm_url, dupes)
     # Return the surviving ID (most attempts, same key as _merge_url_group)
     dupes.sort(key=lambda r: (r.get("attempts") or 0, r.get("solved_at") or ""), reverse=True)
     return dupes[0]["id"]
@@ -576,12 +655,26 @@ _SETTINGS_DEFAULTS = {
 
 def get_user_settings(user_id: str) -> dict:
     """Return the user's settings, falling back to defaults if none are stored."""
-    stored = db.fetch_one(
-        "SELECT revision_queue_size, desired_retention, fsrs_params "
-        "FROM user_settings WHERE user_id = %s",
-        (user_id,),
-    )
-    if stored:
+    client = get_client()
+    try:
+        result = (
+            client.table("user_settings")
+            .select("revision_queue_size, desired_retention, fsrs_params")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        # Pre-009 database: FSRS settings columns don't exist yet.
+        result = (
+            client.table("user_settings")
+            .select("revision_queue_size")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+    if result.data:
+        stored = result.data[0]
         return {
             "revision_queue_size": stored.get("revision_queue_size", DEFAULT_REVISION_QUEUE_SIZE),
             "desired_retention": stored.get("desired_retention") or DEFAULT_DESIRED_RETENTION,
@@ -592,8 +685,14 @@ def get_user_settings(user_id: str) -> dict:
 
 def upsert_user_settings(user_id: str, data: dict) -> dict:
     """Insert or update the user's settings row and return the stored values."""
+    client = get_client()
     row = {"user_id": user_id, **data}
-    stored = db.upsert("user_settings", row, conflict=("user_id",)) or row
+    result = (
+        client.table("user_settings")
+        .upsert(row, on_conflict="user_id")
+        .execute()
+    )
+    stored = result.data[0] if result.data else row
     return {
         "revision_queue_size": stored.get("revision_queue_size"),
         "desired_retention": stored.get("desired_retention", DEFAULT_DESIRED_RETENTION),
@@ -602,20 +701,34 @@ def upsert_user_settings(user_id: str, data: dict) -> dict:
 
 
 def get_user_platforms(user_id: str) -> list[dict]:
-    return db.fetch_all(
-        "SELECT id, user_id, name, url_pattern, created_at FROM user_platforms "
-        "WHERE user_id = %s ORDER BY created_at ASC, id ASC",
-        (user_id,),
+    client = get_client()
+    result = (
+        client.table("user_platforms")
+        .select("id, user_id, name, url_pattern, created_at")
+        .eq("user_id", user_id)
+        .order("created_at", desc=False)
+        .execute()
     )
+    return result.data
 
 
 def insert_user_platform(user_id: str, data: dict) -> dict:
+    client = get_client()
     row = {"user_id": user_id, "name": data["name"], "url_pattern": data["url_pattern"]}
-    return db.insert("user_platforms", row)
+    result = client.table("user_platforms").insert(row).execute()
+    return result.data[0]
 
 
 def delete_user_platform(user_id: str, platform_id: int) -> bool:
-    return len(db.delete("user_platforms", {"user_id": user_id, "id": platform_id})) > 0
+    client = get_client()
+    result = (
+        client.table("user_platforms")
+        .delete()
+        .eq("user_id", user_id)
+        .eq("id", platform_id)
+        .execute()
+    )
+    return len(result.data) > 0
 
 
 def _norm_difficulty(value: str | None) -> str:
@@ -804,35 +917,62 @@ def ensure_user_profile(user_id: str, email: str | None = None) -> dict:
 
     Never flips is_admin — that is managed explicitly via set_user_admin. Returns
     the stored profile ({user_id, email, is_admin})."""
-    row = db.fetch_one(
-        "SELECT user_id, email, is_admin FROM user_profiles WHERE user_id = %s", (user_id,)
+    client = get_client()
+    existing = (
+        client.table("user_profiles")
+        .select("user_id, email, is_admin")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
     )
-    if row:
+    if existing.data:
+        row = existing.data[0]
         # Backfill/refresh the cached email if we learned it from the token.
         if email and row.get("email") != email:
-            db.update("user_profiles", {"email": email}, {"user_id": user_id}, returning="user_id")
+            client.table("user_profiles").update(
+                {"email": email}
+            ).eq("user_id", user_id).execute()
             row["email"] = email
         return row
     # Race-safe insert: ON CONFLICT DO NOTHING so two concurrent first-logins
     # can't 500, and an existing is_admin is never clobbered back to false.
     row = {"user_id": user_id, "email": email, "is_admin": False}
-    db.upsert("user_profiles", row, conflict=("user_id",), ignore_duplicates=True)
+    client.table("user_profiles").upsert(
+        row, on_conflict="user_id", ignore_duplicates=True
+    ).execute()
     return row
 
 
 PROFILE_COLUMNS = "user_id, email, display_name, avatar_url, platform_links, timezone"
+# Pre-migration-007 column set, so a fresh deploy still serves profiles.
+LEGACY_PROFILE_COLUMNS = "user_id, email, display_name, avatar_url, platform_links"
 
 
 def get_profile(user_id: str) -> dict:
-    """The user's public-facing profile fields (plus cached email). Users with
-    no profile row yet get an empty profile."""
-    row = db.fetch_one(
-        f"SELECT {PROFILE_COLUMNS} FROM user_profiles WHERE user_id = %s", (user_id,)
-    )
-    if row:
-        row["platform_links"] = row.get("platform_links") or {}
-        row["timezone"] = row.get("timezone") or DEFAULT_TIMEZONE
-        return row
+    """The user's public-facing profile fields (plus cached email).
+
+    Degrades gracefully if columns don't exist yet: retries without the
+    timezone column (pre-007), and falls back to an empty profile if even
+    the 006 columns are missing, so pages that embed profile data keep
+    working."""
+    client = get_client()
+    for cols in (PROFILE_COLUMNS, LEGACY_PROFILE_COLUMNS):
+        try:
+            result = (
+                client.table("user_profiles")
+                .select(cols)
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            if result.data:
+                row = result.data[0]
+                row["platform_links"] = row.get("platform_links") or {}
+                row["timezone"] = row.get("timezone") or DEFAULT_TIMEZONE
+                return row
+            break  # query worked, user simply has no row yet
+        except Exception as e:
+            print(f"[profile] read failed (run migrations 006/007?): {e}")
     return {
         "user_id": user_id,
         "email": None,
@@ -844,86 +984,164 @@ def get_profile(user_id: str) -> dict:
 
 
 def update_profile(user_id: str, fields: dict) -> dict:
-    db.upsert("user_profiles", {"user_id": user_id, **fields}, conflict=("user_id",))
+    client = get_client()
+    client.table("user_profiles").upsert(
+        {"user_id": user_id, **fields}, on_conflict="user_id"
+    ).execute()
     return get_profile(user_id)
 
 
 def upload_avatar(user_id: str, content: bytes, content_type: str, ext: str) -> str:
-    """Save the avatar under AVATAR_DIR and return the URL it's served at.
+    """Store the avatar in the public 'avatars' bucket and return its URL.
 
-    The path is stable per user (overwritten on re-upload, other formats
-    removed); a version query param busts browser caches."""
-    folder = os.path.join(AVATAR_DIR, user_id)
-    os.makedirs(folder, exist_ok=True)
-    name = f"avatar.{ext}"
-    tmp = os.path.join(folder, f".{name}.tmp")
-    with open(tmp, "wb") as f:
-        f.write(content)
-    os.replace(tmp, os.path.join(folder, name))
-    for other in os.listdir(folder):
-        if other.startswith("avatar.") and other != name:
-            os.remove(os.path.join(folder, other))
-    return f"/avatars/{user_id}/{name}?v={int(datetime.utcnow().timestamp())}"
+    The path is stable per user (overwritten on re-upload); a version query
+    param busts browser caches."""
+    client = get_client()
+    path = f"{user_id}/avatar.{ext}"
+    client.storage.from_("avatars").upload(
+        path, content, {"content-type": content_type, "upsert": "true"}
+    )
+    url = client.storage.from_("avatars").get_public_url(path).rstrip("?")
+    return f"{url}?v={int(datetime.utcnow().timestamp())}"
 
 
 def is_user_admin(user_id: str) -> bool:
-    row = db.fetch_one("SELECT is_admin FROM user_profiles WHERE user_id = %s", (user_id,))
-    return bool(row and row.get("is_admin"))
+    client = get_client()
+    result = (
+        client.table("user_profiles")
+        .select("is_admin")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(result.data and result.data[0].get("is_admin"))
 
 
 def set_user_admin(user_id: str, is_admin: bool) -> None:
-    db.upsert("user_profiles", {"user_id": user_id, "is_admin": is_admin}, conflict=("user_id",))
+    client = get_client()
+    client.table("user_profiles").upsert(
+        {"user_id": user_id, "is_admin": is_admin},
+        on_conflict="user_id",
+    ).execute()
 
 
 def get_user_features(user_id: str) -> list[str]:
     """Return the list of feature names granted to this user."""
-    rows = db.fetch_all("SELECT feature FROM feature_access WHERE user_id = %s", (user_id,))
-    return [r["feature"] for r in rows]
+    client = get_client()
+    result = (
+        client.table("feature_access")
+        .select("feature")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return [r["feature"] for r in (result.data or [])]
 
 
 def grant_feature(user_id: str, feature: str) -> None:
-    db.upsert(
-        "feature_access",
+    client = get_client()
+    client.table("feature_access").upsert(
         {"user_id": user_id, "feature": feature},
-        conflict=("user_id", "feature"),
-    )
+        on_conflict="user_id,feature",
+    ).execute()
 
 
 def revoke_feature(user_id: str, feature: str) -> None:
-    db.delete("feature_access", {"user_id": user_id, "feature": feature})
+    client = get_client()
+    (
+        client.table("feature_access")
+        .delete()
+        .eq("user_id", user_id)
+        .eq("feature", feature)
+        .execute()
+    )
 
 
 def find_user_by_email(email: str) -> dict | None:
-    """Look up a user by email (case-insensitive).
+    """Look up an auth user by email (case-insensitive) via the admin API.
 
     Returns {user_id, email} or None if nobody has signed up with that email."""
-    row = db.fetch_one(
-        "SELECT id, email FROM users WHERE lower(email) = lower(%s) ORDER BY created_at LIMIT 1",
-        (email.strip(),),
-    )
-    return {"user_id": row["id"], "email": row["email"]} if row else None
+    target = email.strip().lower()
+    for u in _iter_auth_users():
+        if (u.get("email") or "").strip().lower() == target:
+            return {"user_id": u["id"], "email": u.get("email")}
+    return None
+
+
+def _iter_auth_users():
+    """Yield every auth user as a plain dict, paging through the admin API."""
+    client = get_client()
+    page = 1
+    while True:
+        resp = client.auth.admin.list_users(page=page, per_page=200)
+        # The supabase client returns either a list or an object with .users
+        users = resp if isinstance(resp, list) else getattr(resp, "users", []) or []
+        if not users:
+            break
+        for u in users:
+            last = (
+                getattr(u, "last_sign_in_at", None)
+                if not isinstance(u, dict)
+                else u.get("last_sign_in_at")
+            )
+            # The admin API returns a datetime; normalize to an ISO string so it
+            # sorts consistently (never str-vs-datetime) and JSON-serializes.
+            if hasattr(last, "isoformat"):
+                last = last.isoformat()
+            yield {
+                "id": str(getattr(u, "id", None) or u["id"]),
+                "email": getattr(u, "email", None) if not isinstance(u, dict) else u.get("email"),
+                "last_sign_in_at": last,
+            }
+        if len(users) < 200:
+            break
+        page += 1
 
 
 def list_all_users() -> list[dict]:
-    """List every user with their admin flag and granted features, most
-    recently signed in first. Used by the admin panel."""
-    users = db.fetch_all(
-        "SELECT u.id AS user_id, u.email, u.last_sign_in_at, "
-        "COALESCE(p.is_admin, false) AS is_admin, "
-        "COALESCE(ARRAY(SELECT f.feature FROM feature_access f "
-        "WHERE f.user_id = u.id ORDER BY f.feature), '{}') AS features "
-        "FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id"
-    )
+    """List every auth user with their admin flag and granted features.
+
+    Used by the admin panel. Joins the Supabase auth user list with
+    user_profiles (is_admin) and feature_access (features)."""
+    client = get_client()
+    profiles = {
+        p["user_id"]: p
+        for p in (
+            client.table("user_profiles")
+            .select("user_id, is_admin")
+            .execute()
+            .data
+            or []
+        )
+    }
+    features_by_user: dict[str, list[str]] = defaultdict(list)
+    for row in (
+        client.table("feature_access").select("user_id, feature").execute().data or []
+    ):
+        features_by_user[row["user_id"]].append(row["feature"])
+
+    users = []
+    for u in _iter_auth_users():
+        uid = u["id"]
+        users.append(
+            {
+                "user_id": uid,
+                "email": u.get("email"),
+                "last_sign_in_at": u.get("last_sign_in_at"),
+                "is_admin": bool(profiles.get(uid, {}).get("is_admin")),
+                "features": sorted(features_by_user.get(uid, [])),
+            }
+        )
     # Signed-in-most-recently first, unknown last.
     users.sort(key=lambda x: (x["last_sign_in_at"] or ""), reverse=True)
     return users
 
 
 def get_auth_email(user_id: str) -> str | None:
-    """A user's email from the users table. None on any failure."""
+    """Resolve a user's email from the auth admin API. None on any failure."""
     try:
-        row = db.fetch_one("SELECT email FROM users WHERE id = %s", (user_id,))
-        return row["email"] if row else None
+        resp = get_client().auth.admin.get_user_by_id(user_id)
+        user = getattr(resp, "user", resp)
+        return getattr(user, "email", None)
     except Exception:
         return None
 
@@ -939,8 +1157,7 @@ def log_access_event(
     """Append an access-control change to the audit log. Best-effort: an audit
     failure must never break the actual grant/revoke it records."""
     try:
-        db.insert(
-            "access_audit",
+        get_client().table("access_audit").insert(
             {
                 "actor_id": actor_id,
                 "actor_email": actor_email,
@@ -948,19 +1165,25 @@ def log_access_event(
                 "target_email": target_email or get_auth_email(target_id),
                 "action": action,
                 "feature": feature,
-            },
-            returning="id",
-        )
+            }
+        ).execute()
     except Exception as e:  # audit must never break the operation
         print(f"[audit] failed to log {action} by {actor_email}: {e}")
 
 
 def get_recent_audit(limit: int = 50) -> list[dict]:
-    """Most-recent access-control changes, newest first."""
+    """Most-recent access-control changes, newest first. Returns [] if the audit
+    table isn't present yet (e.g. code deployed before migration 004)."""
     try:
-        return db.fetch_all(
-            "SELECT * FROM access_audit ORDER BY created_at DESC, id DESC LIMIT %s", (limit,)
+        result = (
+            get_client()
+            .table("access_audit")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
         )
+        return result.data or []
     except Exception as e:
         print(f"[audit] read failed: {e}")
         return []
