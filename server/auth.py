@@ -29,14 +29,23 @@ from supabase import create_client
 import database
 from database import ensure_user
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
-SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-SUPABASE_JWT_SECRET = os.environ["SUPABASE_JWT_SECRET"]
+# Only needed while SUPABASE_AUTH is on (email links, the session bridge).
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8765")
 REVISE_JWT_SECRET = os.environ["REVISE_JWT_SECRET"]
 if len(REVISE_JWT_SECRET) < 32:
     raise RuntimeError("REVISE_JWT_SECRET must be at least 32 characters")
+
+# "off" once Revise no longer relies on Supabase Auth: no email links, no
+# Supabase access tokens, and a Supabase refresh token works only if it was
+# already exchanged or imported (import_supabase_sessions.py).
+SUPABASE_AUTH = os.environ.get("SUPABASE_AUTH", "on").strip().lower() != "off"
+if SUPABASE_AUTH and not (SUPABASE_URL and SUPABASE_ANON_KEY and SUPABASE_JWT_SECRET):
+    raise RuntimeError("SUPABASE_AUTH is on but SUPABASE_URL / SUPABASE_ANON_KEY / "
+                       "SUPABASE_JWT_SECRET are missing; set them, or set SUPABASE_AUTH=off")
 
 ISSUER = "revise"
 ACCESS_TOKEN_SECONDS = 3600
@@ -117,6 +126,8 @@ def refresh(refresh_token: str, user_agent: str | None = None) -> dict:
     if row:
         user_id = row["user_id"]
         email = (database.get_user(user_id) or {}).get("email")
+    elif not SUPABASE_AUTH:
+        raise SessionExpired("unknown session")
     else:
         try:
             supa = refresh_session(refresh_token)  # the bridge: once per token
@@ -158,6 +169,9 @@ def verify_token(token: str) -> dict:
         if jwt.get_unverified_claims(token).get("iss") == ISSUER:
             return jwt.decode(token, REVISE_JWT_SECRET, algorithms=["HS256"],
                               audience="authenticated", issuer=ISSUER)
+        if not SUPABASE_AUTH:
+            # The client refreshes (with its copied session) and carries on.
+            raise JWTError("Supabase sessions are no longer accepted directly")
         # Try ES256 first (newer Supabase projects)
         header = jwt.get_unverified_header(token)
         if header.get("alg") == "ES256":

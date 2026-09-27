@@ -13,6 +13,8 @@
 #                                      own Postgres (requests pause for ~1 second)
 #   scripts/supabase-exit.sh phase2    settings for Revise's own sign-in: a signing
 #                                      secret, and (optionally) the GitHub app keys
+#   scripts/supabase-exit.sh phase3    stop using Supabase for sign-in: copy its
+#                                      sessions, switch it off, retire email links
 #   scripts/supabase-exit.sh status    where things stand
 #
 # Each step checks the previous one and stops on the first problem, leaving
@@ -272,6 +274,40 @@ cmd_phase2() {
   bold "Phase 2 settings done."
 }
 
+cmd_phase3() {
+  [ "$(env_get DB_TARGET)" = "local" ] || fail "Do the cutover first."
+  [ -n "$(env_get GITHUB_CLIENT_ID)" ] || fail "Set up GitHub sign-in first ('phase2'): it replaces email links."
+  if [ "$(env_get SUPABASE_AUTH)" = "off" ]; then
+    ok "Supabase sign-in is already off; copying its sessions once more"
+    docker compose exec -T server python import_supabase_sessions.py < /dev/null
+    return
+  fi
+  echo "This retires email sign-in links (GitHub only from now on) and stops all"
+  echo "calls to Supabase. Signed-in people stay signed in."
+  read -r -p "Type PHASE3 to go: " answer
+  [ "$answer" = "PHASE3" ] || fail "Not confirmed; nothing changed."
+
+  bold "1/4  Copying Supabase's valid sessions into Revise"
+  docker compose exec -T server python import_supabase_sessions.py < /dev/null \
+    || fail "The copy failed; nothing was switched off."
+
+  bold "2/4  Switching Supabase sign-in off"
+  backup_env
+  env_set SUPABASE_AUTH off
+  docker compose up -d server
+  wait_for_site
+  ok "restarted without Supabase sign-in"
+
+  bold "3/4  Copying again (catches anything that changed in between)"
+  docker compose exec -T server python import_supabase_sessions.py < /dev/null
+
+  bold "4/4  Checking"
+  curl -s http://localhost:8765/api/auth/config | grep -q '"email_links":false' \
+    || fail "The site still offers email links; check the server logs."
+  ok "email links retired, GitHub sign-in on"
+  bold "Done. Revise no longer depends on Supabase for sign-in. To undo: set SUPABASE_AUTH=on in .env and run 'docker compose up -d server'."
+}
+
 cmd_status() {
   echo "DB_TARGET in .env:       $(env_get DB_TARGET)"
   echo "SUPABASE_DB_URL in .env: $([ -n "$(env_get SUPABASE_DB_URL)" ] && echo set || echo missing)"
@@ -280,6 +316,7 @@ cmd_status() {
   echo "latest backup:           $(ls -t "$HOME"/revise-backups/revise-*.dump 2>/dev/null | head -1 || echo none)"
   echo "session signing secret:  $([ -n "$(env_get REVISE_JWT_SECRET)" ] && echo set || echo missing)"
   echo "GitHub sign-in:          $([ -n "$(env_get GITHUB_CLIENT_ID)" ] && echo configured || echo 'not configured')"
+  echo "Supabase sign-in:        $([ "$(env_get SUPABASE_AUTH)" = "off" ] && echo 'off (phase 3 done)' || echo on)"
 }
 
 case "${1:-}" in
@@ -291,6 +328,7 @@ case "${1:-}" in
   verify) cmd_verify ;;
   cutover) cmd_cutover ;;
   phase2) cmd_phase2 ;;
+  phase3) cmd_phase3 ;;
   status) cmd_status ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

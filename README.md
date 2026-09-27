@@ -10,7 +10,7 @@ Track everything you study — coding problems, math exercises, design tutorials
 [![CI](https://img.shields.io/github/actions/workflow/status/the-mrinal/revise/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/the-mrinal/revise/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-FastAPI-3b82f6?style=for-the-badge&logo=python&logoColor=white)](https://fastapi.tiangolo.com)
-[![Supabase](https://img.shields.io/badge/Supabase-Postgres-3ecf8e?style=for-the-badge&logo=supabase&logoColor=white)](https://supabase.com)
+[![Postgres](https://img.shields.io/badge/Postgres-17-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org)
 
 <br />
 
@@ -29,7 +29,7 @@ Revise is a browser extension + web dashboard that:
 - **Schedules revisions** using FSRS, the modern spaced repetition algorithm behind Anki
 - **Shows a dashboard** with stats, charts, activity feed, and a filterable table of everything you've tracked
 
-No passwords. Sign in with a magic link. Your data is yours.
+No new password to remember: sign in with GitHub. Your data is yours.
 
 ## Screenshots
 
@@ -44,12 +44,6 @@ No passwords. Sign in with a magic link. Your data is yours.
 ![Dashboard](docs/images/dashboard.png)
 
 > Full analytics: items tracked, difficulty breakdown, platform distribution, revision schedule, and daily activity — all in one view.
-
-### Magic Link Login
-
-![Login](docs/images/login.png)
-
-> No passwords to remember. Enter your email, click the link, you're in.
 
 ### Browser Extension
 
@@ -74,7 +68,7 @@ Browser Extension (Chrome / Safari)
         |
         |  REST API
         v
-   FastAPI Server  -->  Supabase (Postgres + Auth)
+   FastAPI Server  -->  Postgres (sessions, data)  <--  GitHub sign-in
         |
         v
    Web Dashboard (revise.mrinal.dev/dashboard)
@@ -112,12 +106,12 @@ Any other URL works too — it's tagged as "other". You can add custom platforms
 - **Built-in Timer** — start when you begin studying, pause/resume, stop when done. Time is recorded automatically.
 - **Custom Platforms** — add any website from the dashboard settings. Define a name and URL pattern, and it auto-detects just like the built-in platforms.
 - **Analytics Dashboard** — items tracked, difficulty breakdown, platform distribution, revision schedule, daily activity feed.
-- **Magic Link Auth** — no passwords. Enter your email, click the link in your inbox, done. Powered by Supabase Auth.
+- **Sign in with GitHub** — one click, no new password. The extension picks up your session from the dashboard automatically.
 - **10+ Platforms** — auto-detects LeetCode, Codeforces, HackerRank, CodeChef, GeeksForGeeks, InterviewBit, AtCoder, NeetCode, AlgoMonster, DesignGurus.
 - **Browser Extension** — Chrome and Safari. Captures the current URL with one click.
 - **Due for Revision** — the extension and dashboard both show which items are due today, so you always know what to revise.
 - **CSV Export** — download your entire history as a CSV.
-- **Per-user Data Isolation** — Row Level Security on Supabase. Each user only sees their own data.
+- **Per-user Data Isolation** — every API request is checked against the signed-in account; each user only sees their own data.
 
 ## Getting Started
 
@@ -125,8 +119,8 @@ Any other URL works too — it's tagged as "other". You can add custom platforms
 
 1. Go to [revise.mrinal.dev](https://revise.mrinal.dev)
 2. Click **Get Started Free**
-3. Enter your email and click **Send Magic Link**
-4. Check your inbox, click the link — you're logged in
+3. Click **Sign in with GitHub**
+4. Approve Revise on GitHub — you're signed in
 5. Install the browser extension (see below)
 6. Start learning!
 
@@ -143,137 +137,28 @@ Any other URL works too — it's tagged as "other". You can add custom platforms
 
 ### Self-host (for developers)
 
-#### 1. Supabase Setup
+#### 1. Create a GitHub OAuth app
 
-Create a [Supabase](https://supabase.com) project and run this in the SQL Editor:
+At [github.com/settings/applications/new](https://github.com/settings/applications/new):
+- **Homepage URL**: `https://your-domain.com`
+- **Authorization callback URL**: `https://your-domain.com/api/auth/github/callback`
 
-```sql
-create table public.questions (
-  id bigint generated always as identity primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  url text not null,
-  title text,
-  platform text,
-  difficulty text,
-  self_rating integer check (self_rating between 1 and 5),
-  time_taken integer,
-  notes text,
-  solved_at timestamptz default now(),
-  easiness_factor double precision default 2.5,  -- legacy SM-2 (kept for rollback)
-  interval integer default 1,
-  repetitions integer default 0,                 -- legacy SM-2 (kept for rollback)
-  next_review date,
-  last_reviewed timestamptz,
-  attempts integer default 1,
-  -- study metadata
-  pattern text,
-  question_type text default 'dsa',
-  approach text,
-  mistakes text,
-  time_complexity text,
-  space_complexity text,
-  -- FSRS memory state + solution source (migration 009)
-  stability double precision,
-  fsrs_difficulty double precision,
-  fsrs_state smallint,
-  solution_source text check (solution_source in ('self', 'hint', 'solution'))
-);
+Then generate a client secret.
 
-alter table public.questions enable row level security;
+#### 2. Environment variables
 
-create policy "Users see own questions" on public.questions for select using (auth.uid() = user_id);
-create policy "Users insert own questions" on public.questions for insert with check (auth.uid() = user_id);
-create policy "Users update own questions" on public.questions for update using (auth.uid() = user_id);
-create policy "Users delete own questions" on public.questions for delete using (auth.uid() = user_id);
-
-create index idx_questions_user_url on public.questions(user_id, url);
-create index idx_questions_next_review on public.questions(user_id, next_review);
-
--- Custom platforms (for user-defined URL patterns)
-create table public.user_platforms (
-  id bigint generated always as identity primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  name text not null,
-  url_pattern text not null,
-  created_at timestamptz default now()
-);
-
-alter table public.user_platforms enable row level security;
-
-create policy "Users see own platforms" on public.user_platforms for select using (auth.uid() = user_id);
-create policy "Users insert own platforms" on public.user_platforms for insert with check (auth.uid() = user_id);
-create policy "Users update own platforms" on public.user_platforms for update using (auth.uid() = user_id);
-create policy "Users delete own platforms" on public.user_platforms for delete using (auth.uid() = user_id);
-
-create unique index idx_user_platforms_unique on public.user_platforms(user_id, name);
-
--- Per-question audit/event log (history of every solve / review / re-attempt).
--- Also available as server/migrations/001_question_events.sql
-create table public.question_events (
-  id              bigint generated always as identity primary key,
-  user_id         uuid not null references auth.users(id) on delete cascade,
-  question_id     bigint not null references public.questions(id) on delete cascade,
-  event_type      text not null,            -- 'created' | 'reviewed' | 'attempted'
-  self_rating     integer,
-  time_taken      integer,
-  interval        integer,                  -- schedule snapshot AFTER this event
-  repetitions     integer,                  -- legacy SM-2 (frozen post-FSRS)
-  easiness_factor double precision,         -- legacy SM-2 (frozen post-FSRS)
-  next_review     date,
-  reconstructed   boolean default false,    -- true for backfilled rows (approximate)
-  created_at      timestamptz default now(),
-  -- FSRS snapshot + solution source (migration 009)
-  solution_source text check (solution_source in ('self', 'hint', 'solution')),
-  stability       double precision,
-  fsrs_difficulty double precision,
-  fsrs_state      smallint
-);
-
-alter table public.question_events enable row level security;
-
-create policy "Users see own events" on public.question_events for select using (auth.uid() = user_id);
-create policy "Users insert own events" on public.question_events for insert with check (auth.uid() = user_id);
-create policy "Users update own events" on public.question_events for update using (auth.uid() = user_id);
-create policy "Users delete own events" on public.question_events for delete using (auth.uid() = user_id);
-
-create index idx_qevents_question on public.question_events(user_id, question_id, created_at);
-
--- Per-user settings (e.g. how many revisions to surface as "due" at once)
-create table public.user_settings (
-  user_id              uuid primary key references auth.users(id) on delete cascade,
-  revision_queue_size  integer not null default 20,  -- 0 = unlimited
-  updated_at           timestamptz default now(),
-  -- FSRS (migration 009)
-  desired_retention    double precision not null default 0.9
-    check (desired_retention between 0.70 and 0.99),
-  fsrs_params          jsonb                          -- per-user optimized parameters (null = defaults)
-);
-
-alter table public.user_settings enable row level security;
-
-create policy "Users see own settings" on public.user_settings for select using (auth.uid() = user_id);
-create policy "Users insert own settings" on public.user_settings for insert with check (auth.uid() = user_id);
-create policy "Users update own settings" on public.user_settings for update using (auth.uid() = user_id);
-create policy "Users delete own settings" on public.user_settings for delete using (auth.uid() = user_id);
-```
-
-> Existing deployments: apply the incremental migrations in `server/migrations/` (run each `.sql` in the Supabase SQL Editor).
-
-Configure Auth redirect URLs in Supabase Dashboard:
-- **Site URL**: `https://your-domain.com/dashboard`
-- **Redirect URL**: `https://your-domain.com/api/auth/callback`
-
-#### 2. Environment Variables
-
-Create a `.env` file:
+Create a `.env` file next to `docker-compose.yml`:
 
 ```env
-SUPABASE_URL=https://xxx.supabase.co
-SUPABASE_ANON_KEY=eyJ...
-SUPABASE_SERVICE_ROLE_KEY=eyJ...
-SUPABASE_JWT_SECRET=your-jwt-secret
-SERVER_URL=https://your-domain.com
+POSTGRES_PASSWORD=...        # openssl rand -hex 24
+REVISE_JWT_SECRET=...        # openssl rand -hex 32; signs sessions, keep it stable
+GITHUB_CLIENT_ID=...
+GITHUB_CLIENT_SECRET=...
+DB_TARGET=local
+SUPABASE_AUTH=off
 ```
+
+`SERVER_URL` is set in `docker-compose.yml`; change it to your domain.
 
 #### 3. Run
 
@@ -281,15 +166,19 @@ SERVER_URL=https://your-domain.com
 docker compose up -d
 ```
 
-The server starts at `http://localhost:8765`. The landing page is at `/` and the dashboard at `/dashboard`.
+This starts Postgres 17 and the server at `http://localhost:8765` (landing page at `/`, dashboard at `/dashboard`). Database migrations in `server/migrations/pg/` apply automatically on startup.
 
-#### 4. Point the extension at your server
+#### 4. Back up
+
+`scripts/backup.sh` dumps the database and avatars (set `BACKUP_REMOTE` to an rclone remote to copy them off the machine); `scripts/restore-test.sh` proves a dump restores. Run the backup from cron.
+
+#### 5. Point the extension at your server
 
 Update the `SERVER_URL` in the extension's config to point to your self-hosted instance.
 
 #### Deploying updates
 
-The hosted instance is deployed from the **Deploy** workflow in the Actions tab (Run workflow → `main`). It pulls the latest code on the server, rebuilds the container, and verifies the site is up. Database migrations in `server/migrations/` are applied manually against Supabase.
+The hosted instance runs on a homelab that GitHub can't reach, so it pulls: run the **Deploy** workflow (Actions → Run workflow, pick a branch) and `scripts/homelab-deploy.sh`, polling from cron every two minutes, deploys that exact commit, checks the site is up, and logs to `~/revise-deploy.log`.
 
 ## API Endpoints
 
@@ -297,9 +186,12 @@ All endpoints except auth require an `Authorization: Bearer <token>` header.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/auth/magic-link` | Send magic link email |
-| `GET` | `/api/auth/callback` | Handle auth callback (PKCE + implicit flow) |
-| `POST` | `/api/auth/refresh` | Refresh access token |
+| `GET` | `/api/auth/config` | Which sign-in options are available |
+| `GET` | `/api/auth/github/login` | Start signing in with GitHub |
+| `GET` | `/api/auth/github/callback` | GitHub's redirect back; stores the session |
+| `POST` | `/api/auth/github/link` | Connect GitHub to the signed-in account |
+| `POST` | `/api/auth/refresh` | New access token for a refresh token |
+| `POST` | `/api/auth/logout` | End a session |
 | `POST` | `/api/questions` | Save a new item |
 | `GET` | `/api/questions` | List all items |
 | `PUT` | `/api/questions/{id}` | Edit an item |
@@ -336,8 +228,8 @@ The repo includes [15 in-depth study guides](thoughts/shared/research/) covering
 ## Tech Stack
 
 - **Backend**: Python, FastAPI
-- **Database**: Supabase (Postgres + Row Level Security)
-- **Auth**: Supabase Auth (magic link / passwordless)
+- **Database**: Postgres 17 (self-hosted, psycopg)
+- **Auth**: Sign in with GitHub; Revise-issued sessions (JWT access tokens + hashed refresh tokens)
 - **Frontend**: Vanilla HTML/CSS/JS (no frameworks)
 - **Extension**: Manifest V3 (Chrome & Safari)
 - **Deployment**: Docker Compose

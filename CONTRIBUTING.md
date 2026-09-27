@@ -4,7 +4,7 @@ Thanks for your interest in contributing! This project is a browser extension + 
 
 ## Project layout
 
-- `server/` — FastAPI backend (Python), Supabase for data + auth
+- `server/` — FastAPI backend (Python) on Postgres, with GitHub sign-in
 - `extension/` — Chrome/Safari extension (Manifest V3, vanilla JS)
 - `thoughts/shared/research/` — DSA pattern study guides served on the `/research` page
 - `docs/` — README images
@@ -21,7 +21,7 @@ source .venv/bin/activate
 pip install -r server/requirements-dev.txt
 ```
 
-To run the server you need a Supabase project and a `.env` file — see the [Self-host section of the README](README.md#self-host-for-developers). Then:
+To run the server you need a `.env` file (a GitHub OAuth app for sign-in; Postgres comes with `docker compose`) — see the [Self-host section of the README](README.md#self-host-for-developers). Then:
 
 ```bash
 cd server
@@ -30,7 +30,7 @@ uvicorn main:app --reload --port 8765
 
 ### Running tests
 
-Tests don't need a Supabase project — `server/tests/conftest.py` stubs the env vars and the auth dependency.
+Route tests need nothing external — `server/tests/conftest.py` stubs the env vars and the auth dependency. Database tests need a Postgres server: set `TEST_DATABASE_URL` to a superuser connection string (e.g. `docker run -d -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:17.6` and `TEST_DATABASE_URL=postgresql://postgres:test@localhost:55432/postgres`); without it they're skipped.
 
 ```bash
 cd server
@@ -62,7 +62,7 @@ Direct pushes to `main` are blocked; all changes go through PRs with green CI.
 
 ## Database migrations
 
-Schema changes go in `server/migrations/` as numbered `.sql` files (they are applied manually against Supabase — see the note in the README). Keep the full schema in the README's self-host section in sync.
+Schema changes go in `server/migrations/pg/` as numbered `.sql` files; they apply automatically when the server starts (`server/migrate.py`).
 
 ## Adding platform support
 

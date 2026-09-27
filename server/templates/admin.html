@@ -154,6 +154,22 @@
   </div>
 
   <div class="panel">
+    <h2>Sign-in link for someone without GitHub</h2>
+    <div class="grant-row">
+      <input type="email" id="link-email" placeholder="their account's email" autocomplete="off">
+      <button class="primary" id="link-btn" onclick="createSignInLink()">Create link</button>
+    </div>
+    <div class="msg" id="link-msg"></div>
+    <div class="grant-row" id="link-row" hidden>
+      <input type="text" id="link-url" readonly>
+      <button id="link-copy" onclick="copySignInLink()">Copy</button>
+    </div>
+    <div class="sub" style="margin-top:8px;color:var(--text-muted);font-size:12px">
+      Works once, within 72 hours. Send it to them yourself: anyone holding it can sign in as them until it's used.
+    </div>
+  </div>
+
+  <div class="panel">
     <h2>Merge two accounts</h2>
     <div class="grant-row">
       <input type="email" id="merge-from" placeholder="duplicate account's email" autocomplete="off">
@@ -313,6 +329,7 @@ function fmtDateTime(s) {
 const ACTION_LABEL = {
   grant: 'granted', revoke: 'revoked',
   make_admin: 'made admin', remove_admin: 'removed admin', merge: 'merged',
+  sign_in_link: 'created a sign-in link',
 };
 const ACTION_CLASS = {
   grant: 'a-grant', revoke: 'a-revoke', make_admin: 'a-grant', remove_admin: 'a-revoke', merge: 'a-grant',
@@ -329,7 +346,7 @@ function renderAudit(entries) {
     const cls = ACTION_CLASS[e.action] || '';
     return '<li><span class="dotm ' + cls + '"></span>' +
       '<span class="atxt"><b>' + actor + '</b> ' + verb + feat +
-      (e.action === 'grant' || e.action === 'revoke' ? ' for ' : e.action === 'merge' ? ' into ' : ' ') +
+      (e.action === 'grant' || e.action === 'revoke' || e.action === 'sign_in_link' ? ' for ' : e.action === 'merge' ? ' into ' : ' ') +
       '<b>' + target + '</b></span>' +
       '<span class="atime">' + esc(fmtDateTime(e.created_at)) + '</span></li>';
   }).join('') + '</ul>';
@@ -404,6 +421,39 @@ async function grantByEmail() {
     msg.textContent = e.message;
   } finally {
     btn.disabled = false;
+  }
+}
+
+async function createSignInLink() {
+  const email = document.getElementById('link-email').value.trim();
+  const msg = document.getElementById('link-msg');
+  const btn = document.getElementById('link-btn');
+  msg.className = 'msg'; msg.textContent = '';
+  document.getElementById('link-row').hidden = true;
+  if (!email) { msg.className = 'msg err'; msg.textContent = 'Enter an email.'; return; }
+  btn.disabled = true;
+  try {
+    const res = await api('/admin/sign-in-link', { method: 'POST', body: JSON.stringify({ email }) });
+    document.getElementById('link-url').value = res.url;
+    document.getElementById('link-row').hidden = false;
+    msg.className = 'msg ok';
+    msg.textContent = 'Link for ' + res.email + ', valid ' + res.expires_in_hours + ' hours, once.';
+    loadAudit();
+  } catch (e) {
+    msg.className = 'msg err';
+    msg.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function copySignInLink() {
+  const input = document.getElementById('link-url');
+  try {
+    await navigator.clipboard.writeText(input.value);
+    document.getElementById('link-copy').textContent = 'Copied';
+  } catch {
+    input.select();  // fall back to a manual copy
   }
 }
 

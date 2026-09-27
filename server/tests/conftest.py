@@ -109,3 +109,13 @@ def make_supabase_shaped(url: str) -> None:
             " last_sign_in_at timestamptz)"
         )
         conn.execute(tables)
+
+
+@pytest.fixture(autouse=True)
+def _no_leftover_hold():
+    """Tests that drive the cutover hold must not leave requests held for
+    the tests after them."""
+    import cutover
+
+    yield
+    cutover._state.update(hold=False, inflight=0)

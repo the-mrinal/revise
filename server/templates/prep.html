@@ -480,7 +480,12 @@ document.getElementById("githubLoginBtn").addEventListener("click", () => {
 fetch(`${API}/auth/config`).then(r => r.json()).then(cfg => {
   if (!cfg.github) return;
   document.getElementById("githubLoginBtn").hidden = false;
-  document.getElementById("loginOr").hidden = false;
+  if (cfg.email_links === false) {
+    document.getElementById("loginEmail").style.display = "none";
+    document.getElementById("loginBtn").style.display = "none";
+  } else {
+    document.getElementById("loginOr").hidden = false;
+  }
 }).catch(() => {});
 
 // ===== DATA =====
