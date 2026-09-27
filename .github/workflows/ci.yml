@@ -45,7 +45,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install ruff
-        run: pip install ruff
+        # Same version as server/requirements-dev.txt, so a new ruff release
+        # can't fail CI on code that passes locally.
+        run: pip install "$(grep '^ruff==' server/requirements-dev.txt)"
       - name: Run ruff
         run: ruff check server/
 
