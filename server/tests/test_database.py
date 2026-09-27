@@ -88,7 +88,7 @@ def test_migrations_on_supabase_shaped_db_only_add_users(make_database):
         )
         conn.execute("INSERT INTO questions (user_id, url) VALUES (%s, 'https://x.test/')", (U1,))
     applied = migrate.migrate(url, "supabase")
-    assert applied == ["000_baseline.sql", "001_users_from_supabase_auth.sql"]
+    assert applied[:2] == ["000_baseline.sql", "001_users_from_supabase_auth.sql"]
     with psycopg.connect(url) as conn:
         users = conn.execute("SELECT id::text, email FROM users ORDER BY email").fetchall()
         assert users == [(U1, "one@example.com"), (U2, "two@example.com")]

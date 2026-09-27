@@ -19,6 +19,7 @@ os.environ.setdefault("SUPABASE_URL", "http://supabase.test.invalid")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-key")
 os.environ.setdefault("SUPABASE_JWT_SECRET", "test-jwt-secret")
+os.environ.setdefault("REVISE_JWT_SECRET", "test-revise-jwt-secret-0123456789abcdef")
 os.environ.setdefault("AVATAR_DIR", tempfile.mkdtemp(prefix="revise-avatars-"))
 os.environ.setdefault("CUTOVER_DIR", tempfile.mkdtemp(prefix="revise-cutover-"))
 

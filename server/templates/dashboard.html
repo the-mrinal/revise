@@ -390,6 +390,10 @@
   .login-box button { width: 100%; padding: 10px; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
   .login-box button:hover { opacity: 0.85; }
   .login-box .login-status { font-size: 12px; color: var(--muted); margin-top: 12px; }
+  .login-box .github-btn { display: flex; align-items: center; justify-content: center; gap: 8px; background: #24292f; margin-bottom: 4px; }
+  .login-box .github-btn svg { width: 18px; height: 18px; fill: currentColor; }
+  .login-box .login-or { color: var(--muted); font-size: 12px; margin: 16px 0 12px; }
+  .login-box .login-or[hidden], .login-box .github-btn[hidden] { display: none; }
 </style>
   <script defer src="https://analytics.mrinal.dev/script.js" data-website-id="29e1cfac-4d49-4c6b-bbd8-f31dde633598"></script>
 </head>
@@ -403,7 +407,12 @@
 <div class="login-overlay" id="loginOverlay">
   <div class="login-box">
     <h2>Revise</h2>
-    <p class="login-subtitle">Sign in with your email to continue</p>
+    <p class="login-subtitle" id="loginSubtitle">Sign in with your email to continue</p>
+    <button class="github-btn" id="githubLoginBtn" hidden>
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      Sign in with GitHub
+    </button>
+    <p class="login-or" id="loginOr" hidden>Already have an account? Get a sign-in link by email</p>
     <input type="email" id="loginEmail" placeholder="you@example.com">
     <button id="loginBtn">Send Magic Link</button>
     <p class="login-status" id="loginStatus"></p>
@@ -455,6 +464,7 @@
 </header>
 
 <div class="tab-content active" id="tab-overview">
+  <div id="githubNudge"></div>
   <div id="profileNudge"></div>
   <div class="stats-grid" id="statsGrid"></div>
   <div class="chart-card heatmap-card">
@@ -937,8 +947,84 @@ document.getElementById("loginBtn").addEventListener("click", async () => {
   btn.textContent = "Send Magic Link";
 });
 
-// Sign out
+// Sign in with GitHub (shown once the server says it's set up)
+document.getElementById("githubLoginBtn").addEventListener("click", () => {
+  location.href = "/api/auth/github/login?next=/dashboard";
+});
+
+async function loadAuthOptions() {
+  try {
+    const cfg = await fetch(`${API}/auth/config`).then(r => r.json());
+    if (!cfg.github) return;
+    document.getElementById("githubLoginBtn").hidden = false;
+    document.getElementById("loginOr").hidden = false;
+    document.getElementById("loginSubtitle").textContent = "Sign in to continue";
+  } catch {}
+}
+
+// Arriving from the "New to Revise?" page: point at the email sign-in.
+function applySignInHint() {
+  const params = new URLSearchParams(location.search);
+  if (params.get("signin") !== "email") return;
+  const status = document.getElementById("loginStatus");
+  status.textContent = "Sign in with your existing account's email, then choose Connect GitHub.";
+  status.style.color = "";
+  document.getElementById("loginEmail").focus();
+  history.replaceState(null, "", location.pathname);
+}
+
+// Banner for signed-in accounts that aren't connected to GitHub yet, and a
+// one-time note after a GitHub sign-in.
+const GITHUB_NOTES = {
+  linked: "GitHub connected. You can sign in with it from now on.",
+  connected: "Signed in with GitHub and connected it to your existing account.",
+  new: "Welcome to Revise! Your account is ready.",
+};
+
+async function renderGithubNudge() {
+  const el = document.getElementById("githubNudge");
+  const params = new URLSearchParams(location.search);
+  const outcome = params.get("github");
+  if (outcome) history.replaceState(null, "", location.pathname);
+  if (GITHUB_NOTES[outcome]) {
+    el.innerHTML = `<div class="nudge"><span>✅ ${esc(GITHUB_NOTES[outcome])}</span>
+      <span><a class="nudge-dismiss" onclick="this.closest('.nudge').remove()">Dismiss</a></span></div>`;
+    return;
+  }
+  if (localStorage.getItem("github-nudge-dismissed")) return;
+  try {
+    const me = await apiFetch("/me").then(r => r.json());
+    if (!me.github || !me.github.available || me.github.login) return;
+    el.innerHTML = `<div class="nudge">
+      <span>🔑 Connect GitHub so you can sign in with it next time. Your data stays where it is.</span>
+      <span><a onclick="connectGithub()">Connect GitHub</a> &nbsp;·&nbsp; <a class="nudge-dismiss" onclick="dismissGithubNudge()">Dismiss</a></span>
+    </div>`;
+  } catch {}
+}
+
+async function connectGithub() {
+  try {
+    const r = await apiFetch("/auth/github/link", { method: "POST" });
+    if (r.ok) location.href = (await r.json()).url;
+  } catch {}
+}
+
+function dismissGithubNudge() {
+  localStorage.setItem("github-nudge-dismissed", "1");
+  document.getElementById("githubNudge").innerHTML = "";
+}
+
+// Sign out: end the session on the server too, not just in this browser.
 document.getElementById("signOutBtn").addEventListener("click", () => {
+  const auth = getAuth();
+  if (auth && auth.refresh_token) {
+    fetch(`${API}/auth/logout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: auth.refresh_token }),
+      keepalive: true,
+    }).catch(() => {});
+  }
   clearAuthTokens();
   showLogin();
 });
@@ -946,6 +1032,8 @@ document.getElementById("signOutBtn").addEventListener("click", () => {
 // --- Init auth ---
 async function initAuth() {
   captureTokensFromHash();
+  loadAuthOptions();
+  applySignInHint();
   const auth = getAuth();
   if (!auth || !auth.access_token) {
     showLogin();
@@ -956,6 +1044,7 @@ async function initAuth() {
     if (r.ok) {
       hideLogin();
       load();
+      renderGithubNudge();
       return;
     }
   } catch {}

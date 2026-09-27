@@ -102,6 +102,9 @@ a{color:var(--accent);text-decoration:none}
 .login-box input:focus{border-color:var(--accent)}
 .login-box button{width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer}
 .login-box .login-status{font-size:12px;color:var(--muted);margin-top:12px}
+.login-box .github-btn{background:#24292f;margin-bottom:4px}
+.login-box .login-or{color:var(--muted);font-size:12px;margin:16px 0 12px}
+.login-box [hidden]{display:none}
 </style>
   <script defer src="https://analytics.mrinal.dev/script.js" data-website-id="29e1cfac-4d49-4c6b-bbd8-f31dde633598"></script>
 </head>
@@ -111,6 +114,8 @@ a{color:var(--accent);text-decoration:none}
   <div class="login-box">
     <h2>Interview Prep</h2>
     <p class="login-subtitle">Sign in to sync your DSA progress</p>
+    <button class="github-btn" id="githubLoginBtn" hidden>Sign in with GitHub</button>
+    <p class="login-or" id="loginOr" hidden>Already have an account? Get a sign-in link by email</p>
     <input type="email" id="loginEmail" placeholder="you@example.com">
     <button id="loginBtn">Send Magic Link</button>
     <p class="login-status" id="loginStatus"></p>
@@ -464,10 +469,19 @@ document.getElementById("loginBtn").addEventListener("click", async () => {
   try {
     const r = await fetch(`${API}/auth/magic-link`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
     if (r.ok) { status.textContent = "Check your email for the magic link!"; status.style.color = "#6ee7b7"; }
-    else { status.textContent = "Failed to send. Try again."; status.style.color = "#f87171"; }
+    else { const err = await r.json().catch(() => ({})); status.textContent = err.detail || "Failed to send. Try again."; status.style.color = "#f87171"; }
   } catch { status.textContent = "Network error."; status.style.color = "#f87171"; }
   btn.disabled = false; btn.textContent = "Send Magic Link";
 });
+
+document.getElementById("githubLoginBtn").addEventListener("click", () => {
+  location.href = "/api/auth/github/login?next=/prep";
+});
+fetch(`${API}/auth/config`).then(r => r.json()).then(cfg => {
+  if (!cfg.github) return;
+  document.getElementById("githubLoginBtn").hidden = false;
+  document.getElementById("loginOr").hidden = false;
+}).catch(() => {});
 
 // ===== DATA =====
 const PLAN_DAYS = [
