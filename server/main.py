@@ -1,6 +1,7 @@
 """FastAPI server for Revise."""
 
 import html
+import json
 import secrets
 import os
 import re
@@ -90,8 +91,10 @@ from database import (
 from patterns import (
     PATTERNS,
     PROBLEM_SLUGS,
+    PROBLEMS_DATA,
     extract_leetcode_number,
     get_all_pattern_labels,
+    get_bank,
     get_pattern_for_url,
 )
 import auth
@@ -1154,6 +1157,12 @@ def patterns_list():
     return get_all_pattern_labels()
 
 
+@app.get("/api/patterns/bank")
+def patterns_bank():
+    """The pattern sheet as groups → patterns → problems. No sign-in: Sunday reads it."""
+    return get_bank()
+
+
 # --- Pages ---
 
 
@@ -1189,8 +1198,12 @@ def flex_page_user(user_id: str):
 
 @app.get("/research", response_class=HTMLResponse)
 def research_page():
+    # The page's problem data (slugs, titles, difficulties) is server/data/problems.json,
+    # written into the page here so the page and /api/patterns/bank stay the same.
     with open("templates/research.html") as f:
-        return f.read()
+        page = f.read()
+    data = json.dumps(PROBLEMS_DATA["problems"], ensure_ascii=False).replace("</", "<\\/")
+    return page.replace("/*PROBLEMS_JSON*/{}", data, 1)
 
 
 @app.get("/admin", response_class=HTMLResponse)
