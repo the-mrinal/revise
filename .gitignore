@@ -30,3 +30,6 @@ DerivedData/
 
 # Claude
 .claude/
+
+# Checked-in data the server reads (the problem bank)
+!server/data/
