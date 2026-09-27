@@ -75,7 +75,7 @@ urlencode() {  # percent-encode a password for use inside a URL
 }
 
 server_target() {
-  docker compose exec -T server python cutover.py status 2>/dev/null \
+  docker compose exec -T server python cutover.py status < /dev/null 2>/dev/null \
     | grep '"target"' | sed -E 's/.*"target": "([a-z]+)".*/\1/'
 }
 
@@ -184,11 +184,11 @@ cmd_verify() {
   [ "$(server_target)" = "supabase" ] || fail "Expected the server to be on Supabase at this stage (it's on '$(server_target)')."
 
   bold "1/5  Comparing the old and new data code on every user's real data (read-only)"
-  docker compose exec -T server python compare_implementations.py \
+  docker compose exec -T server python compare_implementations.py < /dev/null \
     || fail "The new code returned something different. Nothing was changed. Send me the output above; to back out, redeploy the previous main."
 
   bold "2/5  Moving avatars off Supabase Storage"
-  docker compose exec -T server python copy_avatars.py
+  docker compose exec -T server python copy_avatars.py < /dev/null
 
   bold "3/5  Nightly backups (03:15 UTC)"
   local line="15 3 * * * cd $REVISE_DIR && scripts/backup.sh >> \$HOME/revise-backups/backup.log 2>&1"
@@ -205,7 +205,7 @@ cmd_verify() {
   scripts/restore-test.sh
 
   bold "5/5  Rehearsing the copy into our Postgres (the live site is untouched)"
-  docker compose exec -T server python copy_to_local.py rehearse | tail -3
+  docker compose exec -T server python copy_to_local.py rehearse < /dev/null | tail -3
 
   bold "All checks passed. Leave it running for about a week, then run 'cutover' at a quiet hour."
 }
@@ -214,14 +214,14 @@ cmd_cutover() {
   [ "$(server_target)" = "supabase" ] || fail "The server isn't on Supabase (it's on '$(server_target)'); nothing to cut over."
 
   bold "1/4  Final rehearsal (the live site is untouched)"
-  docker compose exec -T server python copy_to_local.py rehearse | tail -3
+  docker compose exec -T server python copy_to_local.py rehearse < /dev/null | tail -3
 
   echo
   read -r -p "Switch Revise to its own Postgres now? Requests pause for about a second. Type CUTOVER to go: " answer
   [ "$answer" = "CUTOVER" ] || fail "Not confirmed; nothing changed."
 
   bold "2/4  Cutover"
-  docker compose exec -T server python copy_to_local.py run \
+  docker compose exec -T server python copy_to_local.py run < /dev/null \
     || fail "The cutover stopped and the site is still on Supabase, unchanged. Send me the output above."
 
   bold "3/4  Recording the switch in .env"
