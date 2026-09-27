@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Leaving Supabase, phase 1: every step you run on the server, in order.
+# Leaving Supabase, phase 1: every step, run on the machine that serves Revise.
 #
+#   scripts/supabase-exit.sh all       setup + deploy + verify, one after another
 #   scripts/supabase-exit.sh setup     add the new settings to .env (asks for the
-#                                      Supabase connection string) — before merging
-#   scripts/supabase-exit.sh deploy    pull main and restart, still on Supabase
-#                                      (or use the Deploy workflow instead)
+#                                      Supabase database password)
+#   scripts/supabase-exit.sh deploy    switch the checkout to the Phase 1 code and
+#                                      restart (a few seconds, like any deploy);
+#                                      data stays on Supabase
 #   scripts/supabase-exit.sh verify    prove the new code on real data, move avatars,
 #                                      set up nightly backups, rehearse the copy
 #   scripts/supabase-exit.sh cutover   ~1 week later, at a quiet hour: switch to our
@@ -14,13 +16,17 @@
 # Each step checks the previous one and stops on the first problem, leaving
 # the site as it was. Every step is safe to re-run.
 #
-# Before the PR is merged, the script isn't on the server yet. Get it with:
-#   cd ~/github-personal/revise && git fetch origin supabase-exit/phase-1 &&
-#   git show origin/supabase-exit/phase-1:scripts/supabase-exit.sh > ~/supabase-exit.sh &&
-#   bash ~/supabase-exit.sh setup
+# From the Mac, scripts/run-on-homelab.sh copies this script over and runs it.
 set -euo pipefail
 
+# The folder the running Revise container was started from, unless given.
+detect_dir() {
+  docker inspect revise-server-1 \
+    --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true
+}
+REVISE_DIR="${REVISE_DIR:-$(detect_dir)}"
 REVISE_DIR="${REVISE_DIR:-$HOME/github-personal/revise}"
+PHASE1_BRANCH="supabase-exit/phase-1"
 ENV_FILE="$REVISE_DIR/.env"
 PG_IMAGE="postgres:17.6"
 # Revise's Supabase project and its connection pooler (Tokyo), used to build
@@ -132,24 +138,43 @@ cmd_setup() {
   ok "connected to Supabase: $users accounts"
 
   docker compose config -q || fail "docker compose rejects the settings (see above)."
-  bold "Setup done. Next: merge PR #44, then run the Deploy workflow (or 'deploy' here)."
+  bold "Setup done. Next: 'deploy'."
 }
 
 cmd_deploy() {
-  bold "Checking that PR #44 is merged"
-  git fetch -q origin main
-  git cat-file -e origin/main:server/migrate.py 2>/dev/null \
-    || fail "main doesn't contain the Phase 1 code yet. Merge PR #44 first."
-  [ "$(env_get DB_TARGET)" = "supabase" ] || [ "$(env_get DB_TARGET)" = "local" ] \
-    || fail "Run 'setup' first."
-  ok "merged"
+  [ -n "$(env_get DB_TARGET)" ] && [ -n "$(env_get SUPABASE_DB_URL)" ] || fail "Run 'setup' first."
 
-  bold "Pulling and restarting"
-  git pull -q --ff-only origin main
-  docker compose up -d --build
+  bold "1/4  Getting the Phase 1 code"
+  git fetch -q origin
+  local ref="origin/$PHASE1_BRANCH"
+  if git cat-file -e origin/main:server/migrate.py 2>/dev/null; then ref="origin/main"; fi
+  # A local edit to docker-compose.yml (e.g. restart: unless-stopped) is
+  # covered by the new file; keep a copy of it and let the new one in.
+  if ! git diff --quiet -- docker-compose.yml; then
+    git diff -- docker-compose.yml > "$HOME/revise-compose-local-edit.diff"
+    git checkout -- docker-compose.yml
+    ok "set aside a local docker-compose.yml edit (saved in ~/revise-compose-local-edit.diff)"
+  fi
+  git diff --quiet && git diff --cached --quiet \
+    || fail "The checkout has other uncommitted changes (git status). Nothing was changed."
+  ok "was on $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD)"
+  git checkout -q -B "${ref#origin/}" "$ref"
+  ok "now on ${ref#origin/} @ $(git rev-parse --short HEAD)"
+
+  bold "2/4  Building the new image (the site keeps running)"
+  docker compose build -q server
+  ok "built"
+
+  bold "3/4  Starting our Postgres (empty until the cutover)"
+  docker compose up -d --wait db
+  ok "database is up"
+
+  bold "4/4  Restarting Revise on the new code (a few seconds)"
+  docker compose up -d server
   wait_for_site
   docker compose logs server 2>&1 | grep '\[migrate\]' | tail -4 | sed 's/^/  /'
   ok "site is up, serving from: $(server_target)"
+  [ "$(server_target)" = "supabase" ] || fail "Expected to be serving from Supabase at this stage."
   bold "Deployed. Next: 'verify'."
 }
 
@@ -218,10 +243,11 @@ cmd_status() {
 }
 
 case "${1:-}" in
+  all) cmd_setup; cmd_deploy; cmd_verify ;;
   setup) cmd_setup ;;
   deploy) cmd_deploy ;;
   verify) cmd_verify ;;
   cutover) cmd_cutover ;;
   status) cmd_status ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
