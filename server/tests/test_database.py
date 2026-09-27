@@ -1,5 +1,6 @@
 """database.py against a real Postgres (see conftest: TEST_DATABASE_URL)."""
 
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import psycopg
@@ -324,3 +325,18 @@ def test_refuses_to_serve_empty_local_while_supabase_configured(local_db, monkey
     migrate.refuse_empty_local()  # has data: fine
     monkeypatch.delenv("SUPABASE_DB_URL")
     migrate.refuse_empty_local()
+
+
+def test_whole_number_floats_render_like_postgres(users):
+    """Supabase's API returned 3 for a float8 of 3.0; so must we."""
+    q = database.insert_question(U1, _question())
+    database.update_question(U1, q["id"], {"stability": 3.0, "easiness_factor": 2.5})
+    row = database.get_question(U1, q["id"])
+    assert json.dumps([row["stability"], row["easiness_factor"]]) == "[3, 2.5]"
+
+
+def test_due_cards_on_the_same_day_come_oldest_first(users):
+    ids = [database.insert_question(U1, _question(url=f"https://x.test/{i}", next_review="2026-09-01"))["id"]
+           for i in range(3)]
+    database.update_question(U1, ids[0], {"notes": "touched"})  # moves the row in storage
+    assert [r["id"] for r in database.get_revisions_due(U1, "2026-09-02")] == ids

@@ -95,7 +95,7 @@ def insert_event(user_id: str, question_id: int, event_type: str, **fields) -> N
 def get_question_events(user_id: str, qid: int) -> list[dict]:
     return db.fetch_all(
         f"SELECT {EVENT_COLUMNS} FROM question_events "
-        "WHERE user_id = %s AND question_id = %s ORDER BY created_at ASC, id ASC",
+        "WHERE user_id = %s AND question_id = %s ORDER BY created_at ASC",
         (user_id, qid),
     )
 
@@ -106,7 +106,7 @@ def insert_question(user_id: str, data: dict) -> dict:
 
 def get_all_questions(user_id: str) -> list[dict]:
     return db.fetch_all(
-        f"SELECT {COLUMNS} FROM questions WHERE user_id = %s ORDER BY solved_at DESC, id DESC",
+        f"SELECT {COLUMNS} FROM questions WHERE user_id = %s ORDER BY solved_at DESC",
         (user_id,),
     )
 
@@ -150,6 +150,8 @@ def get_revisions_due(
     target = target_date or date.today().isoformat()
     query = (
         f"SELECT {COLUMNS} FROM questions WHERE user_id = %s AND next_review <= %s "
+        # Cards due the same day come oldest first. (Supabase returned them in
+        # whatever order Postgres stored them, which changed with every review.)
         "ORDER BY next_review ASC, id ASC"
     )
     params: tuple = (user_id, target)
@@ -604,7 +606,7 @@ def upsert_user_settings(user_id: str, data: dict) -> dict:
 def get_user_platforms(user_id: str) -> list[dict]:
     return db.fetch_all(
         "SELECT id, user_id, name, url_pattern, created_at FROM user_platforms "
-        "WHERE user_id = %s ORDER BY created_at ASC, id ASC",
+        "WHERE user_id = %s ORDER BY created_at ASC",
         (user_id,),
     )
 
@@ -959,7 +961,7 @@ def get_recent_audit(limit: int = 50) -> list[dict]:
     """Most-recent access-control changes, newest first."""
     try:
         return db.fetch_all(
-            "SELECT * FROM access_audit ORDER BY created_at DESC, id DESC LIMIT %s", (limit,)
+            "SELECT * FROM access_audit ORDER BY created_at DESC LIMIT %s", (limit,)
         )
     except Exception as e:
         print(f"[audit] read failed: {e}")

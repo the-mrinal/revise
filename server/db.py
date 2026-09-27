@@ -108,6 +108,9 @@ def _iso_timestamp(dt: datetime) -> str:
 
 
 def to_api(value):
+    # Postgres renders a whole-number float8 as 3, not 3.0 (json.dumps's form).
+    if isinstance(value, float) and value.is_integer() and abs(value) < 1e15:
+        return int(value)
     if isinstance(value, datetime):
         return _iso_timestamp(value)
     if isinstance(value, date):

@@ -40,6 +40,23 @@ def canonical(value) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
+def same_up_to_ties(a: list[dict], b: list[dict], key: str) -> bool:
+    """Same rows in the same order, except that rows sharing a sort-key value
+    may appear in any order among themselves (the old queries left ties to
+    Postgres' storage order)."""
+    if [r[key] for r in a] != [r[key] for r in b]:
+        return False
+    groups: dict = {}
+    for side, rows in ((0, a), (1, b)):
+        for r in rows:
+            groups.setdefault(r[key], ([], []))[side].append(canonical(r))
+    return all(sorted(x) == sorted(y) for x, y in groups.values())
+
+
+# Reads whose sort key has ties, and that key.
+TIE_KEYS = {"get_revisions_due": "next_review"}
+
+
 def same_instant(a: str | None, b: str | None) -> bool:
     if a is None or b is None:
         return a == b
@@ -75,7 +92,9 @@ def main() -> int:
         uid = u["user_id"]
         for name in PER_USER_READS:
             a, b = getattr(old, name)(uid), getattr(new, name)(uid)
-            if canonical(a) != canonical(b):
+            if canonical(a) != canonical(b) and not (
+                name in TIE_KEYS and same_up_to_ties(a, b, TIE_KEYS[name])
+            ):
                 failures.append(f"{name}({uid}) differs")
             checked += 1
         for q in old.get_all_questions(uid):
