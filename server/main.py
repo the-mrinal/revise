@@ -106,10 +106,14 @@ import sunday
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     watcher = cutover.start_watcher()
+    sender = sunday.start_sender()
     yield
+    sunday.stop_sender()
     cutover.stop_watcher()
     if watcher:
         watcher.join()
+    if sender:
+        sender.join()
     db.close()
 
 
@@ -805,6 +809,8 @@ def create_question(q: QuestionIn, user_id: str = Depends(get_current_user_id)):
             self_rating=q.self_rating, time_taken=q.time_taken,
             solution_source=q.solution_source,
         )
+        if q.self_rating:  # a solve with a rating, not a timer start
+            sunday.queue_save(user_id, existing["id"])
         # was_existing lets the extension's Cancel roll back the right way:
         # delete a fresh row, but only undo the attempt bump on an old one.
         return {**updated, "was_existing": True}
@@ -846,6 +852,8 @@ def create_question(q: QuestionIn, user_id: str = Depends(get_current_user_id)):
         stability=schedule["stability"], fsrs_difficulty=schedule["fsrs_difficulty"],
         fsrs_state=schedule["fsrs_state"],
     )
+    if q.self_rating:  # a solve with a rating, not a timer start
+        sunday.queue_save(user_id, question["id"])
     return {**updated, "was_existing": False}
 
 
@@ -925,6 +933,7 @@ def review_question(qid: int, review: ReviewIn, user_id: str = Depends(get_curre
         stability=result["stability"], fsrs_difficulty=result["fsrs_difficulty"],
         fsrs_state=result["fsrs_state"],
     )
+    sunday.queue_save(user_id, qid)
     return get_question(user_id, qid)
 
 
@@ -952,7 +961,9 @@ def edit_question(qid: int, q: QuestionUpdate, user_id: str = Depends(get_curren
         updates["platform"] = detect_platform(updates["url"], user_plats)
     if not updates:
         raise HTTPException(400, "No fields to update")
-    return update_question(user_id, qid, updates)
+    updated = update_question(user_id, qid, updates)
+    sunday.queue_save(user_id, qid, edited=True)  # the same ref again, with the notes
+    return updated
 
 
 @app.get("/api/activity/today")
