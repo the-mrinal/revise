@@ -9,15 +9,23 @@ route answers 404 and Revise behaves as if Sunday didn't exist.
 
 The signed-in person's own Disconnect (Settings) removes the link here, then
 tells Sunday with the token it gave us.
+
+For a connected account, each solve or review (and each edit of its notes)
+is put in sunday_outbox, and a background thread sends it to Sunday's
+POST /api/revise/saves, retrying with a growing wait while Sunday is down.
+The save in Revise never waits for Sunday. A 401 from Sunday means Sunday
+has already disconnected, so the link is removed here too.
 """
 
 import hmac
 import os
 import secrets
+import threading
 from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 import cutover
@@ -27,6 +35,7 @@ from database import (
     create_user,
     find_user_by_email,
     get_identity_user,
+    get_question,
     get_user_identity,
     link_identity,
     refresh_identity,
@@ -88,6 +97,165 @@ def remove_link_for_user(user_id: str) -> str | None:
         "DELETE FROM sunday_links WHERE user_id = %s RETURNING sunday_token", (user_id,)
     )
     return row["sunday_token"] if row else None
+
+
+# --- Sending saves ---
+
+SEND_TIMEOUT_SECONDS = 10
+POLL_SECONDS = 15
+FIRST_WAIT_SECONDS = 30
+LONGEST_WAIT_SECONDS = 3600
+MAX_TRIES = 30  # about a day of retries once the wait reaches an hour
+
+_stop = threading.Event()
+_wake = threading.Event()
+
+
+def _save_body(question: dict, event: dict, edited: bool) -> dict:
+    """Sunday's save, from Revise's question row and one of its events.
+
+    The rating, how it was solved and the due date are the event's. The time
+    is the event's too; a review has none, and the extension's Save sends it
+    straight after in an edit, so an edit takes the question's. The three
+    notes are the question's (Revise keeps one set per question).
+    solution_source is already Sunday's self/hint/solution.
+    """
+    minutes = event.get("time_taken")
+    if minutes is None and edited:
+        minutes = question.get("time_taken")
+    return {
+        "ref": f"{question['id']}:{event['id']}",
+        "url": question["url"],
+        "title": question.get("title"),
+        "platform": question.get("platform"),
+        "difficulty": question.get("difficulty"),
+        "pattern": question.get("pattern"),
+        "minutes": minutes,
+        "how": event.get("solution_source") or "self",
+        "stars": event["self_rating"],
+        "idea": question.get("approach"),
+        "missed": question.get("mistakes"),
+        "lesson": question.get("notes"),
+        "due_on": event.get("next_review") or question.get("next_review"),
+        "at": event["created_at"],
+        "own_pick": False,
+    }
+
+
+def queue_save(user_id: str, question_id: int, edited: bool = False) -> None:
+    """Queue this question's newest rated event for Sunday, if the account
+    is connected. Called after a solve, a review, or an edit (which sends the
+    same ref again). Events from before connecting are never sent. Never
+    raises: a problem here must not fail the save it follows."""
+    if not enabled():
+        return
+    try:
+        event = db.fetch_one(
+            "SELECT e.id, e.self_rating, e.time_taken, e.solution_source, e.next_review, "
+            "e.created_at FROM question_events e "
+            "JOIN sunday_links l ON l.user_id = e.user_id "
+            "WHERE e.user_id = %s AND e.question_id = %s AND e.self_rating IS NOT NULL "
+            "AND e.created_at >= l.connected_at ORDER BY e.id DESC LIMIT 1",
+            (user_id, question_id),
+        )
+        if not event:
+            return
+        question = get_question(user_id, question_id)
+        if not question:
+            return
+        body = _save_body(question, event, edited)
+        with db.get_pool().connection() as conn, conn.transaction():
+            # A newer body for the same ref replaces one not sent yet.
+            conn.execute("DELETE FROM sunday_outbox WHERE user_id = %s AND ref = %s",
+                         (user_id, body["ref"]))
+            conn.execute("INSERT INTO sunday_outbox (user_id, ref, body) VALUES (%s, %s, %s)",
+                         (user_id, body["ref"], Jsonb(body)))
+        _wake.set()
+    except Exception as e:
+        print(f"[sunday] could not queue a save for q{question_id}: {e}")
+
+
+def _try_later(row: dict, error: str) -> None:
+    tries = row["tries"] + 1
+    if tries >= MAX_TRIES:
+        print(f"[sunday] giving up on {row['ref']} after {tries} tries: {error}")
+        db.execute("DELETE FROM sunday_outbox WHERE id = %s", (row["id"],))
+        return
+    wait = min(FIRST_WAIT_SECONDS * 2 ** (tries - 1), LONGEST_WAIT_SECONDS)
+    db.execute(
+        "UPDATE sunday_outbox SET tries = %s, last_error = %s, "
+        "next_try_at = now() + make_interval(secs => %s) WHERE id = %s",
+        (tries, error[:500], wait, row["id"]),
+    )
+
+
+def send_pending(limit: int = 50) -> int:
+    """Send waiting saves, oldest first; returns how many Sunday took.
+
+    Stops at the first save that is still waiting to be retried, or that
+    fails now, so saves reach Sunday in the order they were made."""
+    if not enabled():
+        return 0
+    rows = db.fetch_all(
+        "SELECT o.id, o.user_id, o.ref, o.body, o.tries, o.next_try_at <= now() AS due, "
+        "l.sunday_token FROM sunday_outbox o LEFT JOIN sunday_links l USING (user_id) "
+        "ORDER BY o.id LIMIT %s",
+        (limit,),
+    )
+    sent, unlinked = 0, set()
+    for row in rows:
+        token = row["sunday_token"]
+        if not token or row["user_id"] in unlinked:  # disconnected since it was queued
+            db.execute("DELETE FROM sunday_outbox WHERE id = %s", (row["id"],))
+            continue
+        if not row["due"]:
+            break
+        try:
+            r = httpx.post(f"{sunday_url()}/api/revise/saves", json=row["body"],
+                           headers={"Authorization": f"Bearer {token}"},
+                           timeout=SEND_TIMEOUT_SECONDS)
+        except httpx.HTTPError as e:
+            _try_later(row, f"{type(e).__name__}: {e}")
+            break
+        if r.status_code == 401:  # Sunday has disconnected this person
+            remove_link_by_token(token)
+            db.execute("DELETE FROM sunday_outbox WHERE user_id = %s", (row["user_id"],))
+            unlinked.add(row["user_id"])
+        elif r.is_success:
+            db.execute("DELETE FROM sunday_outbox WHERE id = %s", (row["id"],))
+            sent += 1
+        elif r.status_code >= 500 or r.status_code in (408, 429):
+            _try_later(row, f"HTTP {r.status_code}")
+            break
+        else:  # Sunday refused this save; sending it again won't change that
+            print(f"[sunday] Sunday refused {row['ref']}: HTTP {r.status_code} {r.text[:200]}")
+            db.execute("DELETE FROM sunday_outbox WHERE id = %s", (row["id"],))
+    return sent
+
+
+def start_sender() -> threading.Thread | None:
+    """The background sender, started with the server when Sunday is set up."""
+    if not enabled():
+        return None
+    _stop.clear()
+
+    def loop():
+        while not _stop.is_set():
+            try:
+                send_pending()
+            except Exception as e:  # keep sending; never take the server down
+                print(f"[sunday] sender error: {e}")
+            _wake.wait(POLL_SECONDS)
+            _wake.clear()
+
+    t = threading.Thread(target=loop, name="sunday-sender", daemon=True)
+    t.start()
+    return t
+
+
+def stop_sender() -> None:
+    _stop.set()
+    _wake.set()
 
 
 # --- Routes ---
@@ -167,3 +335,24 @@ def disconnect(user_id: str = Depends(get_current_user_id)):
         except httpx.HTTPError as e:
             print(f"[sunday] could not tell Sunday about a disconnect: {e}")
     return {"ok": True}
+
+
+@router.get("/api/sunday/where", dependencies=[Depends(require_enabled)])
+def where(url: str = Query(min_length=1), user_id: str = Depends(get_current_user_id)):
+    """For the extension: is this problem in the person's Sunday week?
+    Sunday's own answer, or {linked: false} for an account not connected."""
+    row = db.fetch_one("SELECT sunday_token FROM sunday_links WHERE user_id = %s", (user_id,))
+    if not row:
+        return {"linked": False}
+    token = row["sunday_token"]
+    try:
+        r = httpx.get(f"{sunday_url()}/api/revise/where", params={"url": url},
+                      headers={"Authorization": f"Bearer {token}"}, timeout=5)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Sunday can't be reached: {type(e).__name__}")
+    if r.status_code == 401:  # Sunday has disconnected this person
+        remove_link_by_token(token)
+        return {"linked": False}
+    if not r.is_success:
+        raise HTTPException(502, f"Sunday answered {r.status_code}")
+    return r.json()
