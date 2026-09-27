@@ -23,6 +23,10 @@ set -euo pipefail
 REVISE_DIR="${REVISE_DIR:-$HOME/github-personal/revise}"
 ENV_FILE="$REVISE_DIR/.env"
 PG_IMAGE="postgres:17.6"
+# Revise's Supabase project and its connection pooler (Tokyo), used to build
+# the database address from just the password.
+SUPABASE_REF="omegmxlvokqbleftqjzr"
+SUPABASE_POOLER="aws-1-ap-northeast-1.pooler.supabase.com"
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
@@ -48,6 +52,18 @@ backup_env() {
   copy="$ENV_FILE.bak-$(date -u +%Y%m%dT%H%M%SZ)"
   cp "$ENV_FILE" "$copy" && chmod 600 "$copy"
   ok "saved a copy of .env as $(basename "$copy")"
+}
+
+urlencode() {  # percent-encode a password for use inside a URL
+  local s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-]) out+="$c" ;;
+      *) out+="$(printf '%%%02X' "'$c")" ;;
+    esac
+  done
+  printf '%s' "$out"
 }
 
 server_target() {
@@ -95,22 +111,23 @@ cmd_setup() {
   if [ -n "$url" ]; then
     ok "SUPABASE_DB_URL already set; testing it"
   else
-    echo "  In the Supabase dashboard: Connect (top bar) → Session pooler → copy the URI,"
-    echo "  and put your database password in place of [YOUR-PASSWORD]."
-    echo "  (Forgot it? Project Settings → Database → Reset database password.)"
-    read -r -s -p "  Paste the URI (hidden): " url
+    echo "  Needed: the Supabase *database* password (not an API key)."
+    echo "  Don't know it? Reset it (the live site doesn't use it, so nothing breaks):"
+    echo "    https://supabase.com/dashboard/project/$SUPABASE_REF/settings/database"
+    echo "    → Reset database password → copy the new one."
+    read -r -s -p "  Database password (hidden): " url
     echo
-    [ -n "$url" ] || fail "Nothing pasted. Re-run 'setup' when you have it."
+    [ -n "$url" ] || fail "Nothing entered. Re-run 'setup' when you have it."
     case "$url" in
-      *"[YOUR-PASSWORD]"*) fail "The URI still has [YOUR-PASSWORD] in it. Replace it with the real password and re-run." ;;
-      postgres://*|postgresql://*) ;;
-      *) fail "That doesn't look like a postgres:// URI." ;;
+      *"[YOUR-PASSWORD]"*) fail "That's the template URI. Enter just the password." ;;
+      postgres://*|postgresql://*) ;;  # a full URI works too
+      *) url="postgresql://postgres.$SUPABASE_REF:$(urlencode "$url")@$SUPABASE_POOLER:5432/postgres" ;;
     esac
   fi
   local users
   users="$(docker run --rm "$PG_IMAGE" psql "$url" -Atc 'SELECT count(*) FROM auth.users' 2>&1)" \
-    || fail "Couldn't connect with that URI: $users
-  If the password has characters like @ # / ?, reset it to letters and digits, or percent-encode them."
+    || fail "Couldn't connect: $users
+  If it says 'password authentication failed', the password is wrong: reset it (link above) and re-run."
   env_set SUPABASE_DB_URL "$url"
   ok "connected to Supabase: $users accounts"
 
