@@ -8,7 +8,6 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal, Optional
-from urllib.parse import urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -34,6 +33,7 @@ from auth import (
 )
 from auth import refresh as auth_refresh_tokens
 from database import (
+    _normalize_url,
     AVATAR_DIR,
     count_revisions_done_today,
     decrement_attempts,
@@ -181,14 +181,9 @@ PLATFORM_PATTERNS = {
 
 
 def normalize_url(url: str) -> str:
-    """Strip query params, fragments, and trailing sub-paths like /description/."""
-    parsed = urlparse(url)
-    path = parsed.path.rstrip("/")
-    # LeetCode: keep only /problems/<slug>
-    m = re.match(r"(/problems/[^/]+)", path)
-    if m and "leetcode.com" in parsed.netloc:
-        path = m.group(1)
-    return urlunparse((parsed.scheme, parsed.netloc, path + "/", "", "", ""))
+    """Strip query params, fragments, and a problem's sub-pages; the rules
+    live in database._normalize_url, which merging duplicates uses too."""
+    return _normalize_url(url)
 
 
 def detect_platform(url: str, user_platforms: list[dict] | None = None) -> str:

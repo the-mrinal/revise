@@ -536,12 +536,31 @@ def delete_latest_attempt_event(user_id: str, qid: int) -> None:
 
 
 def _normalize_url(url: str) -> str:
-    """Normalize URL for dedup: strip query params, fragments, sub-paths."""
+    """Normalize URL for dedup: strip query params, fragments, sub-paths.
+
+    One problem, one address, whichever of its pages was open:
+    - LeetCode: /problems/<slug>/ (drops /description/, /submissions/ ...).
+    - CSES: a task's Submit, Statistics and Hacking tabs become
+      /problemset/task/<N>/ (a save from the Submit page kept "submit/N").
+      Not result/<N>: that number is a submission, not a task.
+    - Codeforces: contest/<N>/problem/<X> becomes problemset/problem/<N>/<X>,
+      with <X> in capitals, as Sunday matches it.
+    """
     parsed = urlparse(url)
     path = parsed.path.rstrip("/")
-    m = re.match(r"(/problems/[^/]+)", path)
-    if m and "leetcode.com" in parsed.netloc:
-        path = m.group(1)
+    host = parsed.netloc.lower().removeprefix("www.")
+    if host == "leetcode.com":
+        m = re.match(r"(/problems/[^/]+)", path)
+        if m:
+            path = m.group(1)
+    elif host == "cses.fi":
+        m = re.search(r"/(?:task|submit|stats|hack)/(\d+)$", path)
+        if m:
+            path = f"/problemset/task/{m.group(1)}"
+    elif host == "codeforces.com":
+        m = re.match(r"/(?:contest/(\d+)/problem|problemset/problem/(\d+))/(\w+)$", path)
+        if m:
+            path = f"/problemset/problem/{m.group(1) or m.group(2)}/{m.group(3).upper()}"
     return urlunparse((parsed.scheme, parsed.netloc, path + "/", "", "", ""))
 
 
